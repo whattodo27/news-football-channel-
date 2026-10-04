@@ -1,0 +1,48 @@
+# ─── Сервисы ─────────────────────────────────────────────
+services:
+
+  # Redis — очередь задач и временное хранилище
+  redis:
+    image: redis:7-alpine
+    container_name: newsbot-redis
+    # Порт только на localhost — снаружи недоступен
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      # Данные Redis сохраняются в ./data/redis (переживут пересборку)
+      - ./data/redis:/data
+    # Автоперезапуск при падении
+    restart: unless-stopped
+    # Лимит памяти — защита от OOM на 1 ГБ сервере
+    mem_limit: 128m
+    # Внутренняя сеть
+    networks:
+      - newsbot-net
+
+  # Наш Python-код
+  app:
+    build:
+      # Контекст сборки — папка app/
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: newsbot-app
+    # Переменные из .env
+    env_file:
+      - .env
+    # Монтируем data/ — чтобы SQLite писался на хост, а не внутрь контейнера
+    volumes:
+      - ./data:/data
+    # Зависит от Redis (не запустится раньше)
+    depends_on:
+      - redis
+    restart: unless-stopped
+    mem_limit: 256m
+    networks:
+      - newsbot-net
+    # Команда — пока просто main.py для теста
+    command: python main.py
+
+# ─── Сети ────────────────────────────────────────────────
+networks:
+  newsbot-net:
+    driver: bridge

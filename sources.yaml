@@ -1,0 +1,245 @@
+# Candidate football RSS feeds for the first VPS validation.
+# Eight feeds that returned parseable entries in the first VPS check are
+# enabled for the one-week pilot. This is only a one-time availability pass;
+# review their ongoing health and editorial value after the pilot week.
+# trust_tier is evidence quality, not a guarantee for every topic:
+# official = primary only for that body's own decisions/results;
+# established = established newsroom; specialist = specialist publication;
+# aggregator = discovery only, never an independent confirmation;
+# unrated = do not use as an auto-publication confirmation until reviewed.
+# source_priority is only a source-level tie-breaker. Per-story news_priority
+# must be computed separately from event type/tournament and stored on stories.
+sources:
+  - id: bbc_football
+    name: BBC Sport Football
+    url: https://feeds.bbci.co.uk/sport/football/rss.xml
+    language: en
+    publisher: BBC
+    independence_group: bbc
+    source_type: editorial
+    scope: association_football
+    tournaments: [all_football]
+    trust_tier: established
+    source_priority: 8
+    enabled: true
+
+  - id: espn_soccer
+    name: ESPN Soccer News
+    url: https://www.espn.com/espn/rss/soccer/news
+    language: en
+    publisher: ESPN
+    independence_group: espn
+    source_type: editorial
+    scope: association_football
+    tournaments: [all_football]
+    trust_tier: established
+    source_priority: 7
+    enabled: false
+
+  - id: guardian_football
+    name: The Guardian Football
+    url: https://www.theguardian.com/football/rss
+    language: en
+    publisher: Guardian Media Group
+    independence_group: guardian
+    source_type: editorial
+    scope: association_football
+    tournaments: [all_football]
+    trust_tier: established
+    source_priority: 8
+    enabled: true
+
+  - id: sport_ru_igor_dobrovolskiy
+    name: Sport.ru / Igor Dobrovolskiy RSS
+    url: https://www.sport.ru/rssfeeds/football/igor_dobrovolskiy.rss
+    language: ru
+    publisher: Sport.ru
+    independence_group: sport_ru
+    source_type: editorial
+    scope: association_football
+    tournaments: [all_football]
+    trust_tier: specialist
+    source_priority: 9
+    enabled: true
+
+  - id: uefa
+    name: UEFA RSS
+    url: https://www.uefa.com/rss/
+    language: en
+    publisher: UEFA
+    independence_group: uefa
+    source_type: official
+    scope: association_football
+    tournaments: [uefa_competitions]
+    trust_tier: official
+    source_priority: 9
+    enabled: false
+
+  - id: fifa
+    name: FIFA RSS
+    url: https://www.fifa.com/rss
+    language: en
+    publisher: FIFA
+    independence_group: fifa
+    source_type: official
+    scope: association_football
+    tournaments: [fifa_competitions]
+    trust_tier: official
+    source_priority: 9
+    enabled: false
+
+  - id: bundesliga_news
+    name: Bundesliga English News RSS
+    url: http://www.bundesliga.com/rss/en/rss_news.xml
+    language: en
+    publisher: Bundesliga
+    independence_group: bundesliga
+    source_type: official
+    scope: association_football
+    tournaments: [bundesliga, bundesliga_2]
+    trust_tier: official
+    source_priority: 8
+    enabled: true
+
+  - id: marca_primera
+    name: MARCA Primera División
+    url: https://e00-marca.uecdn.es/rss/futbol/primera-division.xml
+    language: es
+    publisher: MARCA
+    independence_group: marca
+    source_type: editorial
+    scope: association_football
+    tournaments: [la_liga]
+    trust_tier: established
+    source_priority: 7
+    enabled: true
+
+  - id: gazzetta_serie_a
+    name: La Gazzetta dello Sport Serie A
+    url: https://www.gazzetta.it/rss/serie-a.xml
+    language: it
+    publisher: La Gazzetta dello Sport
+    independence_group: gazzetta
+    source_type: editorial
+    scope: association_football
+    tournaments: [serie_a]
+    trust_tier: established
+    source_priority: 7
+    enabled: true
+
+  - id: rmc_ligue_1
+    name: RMC Sport Football / Ligue 1
+    url: https://rmcsport.bfmtv.com/rss/football/ligue-1/
+    language: fr
+    publisher: RMC Sport
+    independence_group: rmc_sport
+    source_type: editorial
+    scope: association_football
+    tournaments: [ligue_1]
+    trust_tier: established
+    source_priority: 7
+    enabled: false
+
+  - id: transfermarkt_news
+    name: Transfermarkt News
+    url: https://www.transfermarkt.de/rss/news
+    language: de
+    publisher: Transfermarkt
+    independence_group: transfermarkt
+    source_type: editorial
+    scope: association_football
+    tournaments: [all_football]
+    trust_tier: specialist
+    source_priority: 6
+    enabled: false
+
+  - id: euro_football_main
+    name: Euro-Football General Feed
+    url: https://www.euro-football.ru/feed
+    language: ru
+    publisher: Euro-Football
+    independence_group: euro_football
+    source_type: editorial
+    scope: association_football
+    tournaments: [all_football]
+    trust_tier: specialist
+    source_priority: 9
+    enabled: true
+
+  - id: rusfootball
+    name: Rusfootball
+    url: http://www.rusfootball.info/rss.xml
+    language: ru
+    publisher: Rusfootball
+    independence_group: rusfootball
+    source_type: editorial
+    scope: association_football
+    tournaments: [russian_football]
+    trust_tier: specialist
+    source_priority: 9
+    enabled: true
+
+  - id: euro_football_category_29
+    name: Euro-Football Category 29
+    url: https://www.euro-football.ru/category/rss/29
+    language: ru
+    publisher: Euro-Football
+    independence_group: euro_football
+    source_type: editorial
+    scope: association_football
+    tournaments: [rpl]
+    trust_tier: specialist
+    source_priority: 8
+    enabled: false
+
+  - id: euro_football_category_30985
+    name: Euro-Football Category 30985
+    url: https://www.euro-football.ru/category/rss/30985
+    language: ru
+    publisher: Euro-Football
+    independence_group: euro_football
+    source_type: editorial
+    scope: association_football
+    tournaments: [first_league]
+    trust_tier: specialist
+    source_priority: 7
+    enabled: false
+
+  - id: euro_football_russia_team
+    name: Euro-Football Russia Team Feed
+    url: https://www.euro-football.ru/team/rossiya/rss
+    language: ru
+    publisher: Euro-Football
+    independence_group: euro_football
+    source_type: editorial
+    scope: association_football
+    tournaments: [russia_national_team]
+    trust_tier: specialist
+    source_priority: 8
+    enabled: false
+
+  - id: yandex_football
+    name: Yandex News Football
+    url: http://news.yandex.ru/football5.rss
+    language: ru
+    publisher: Yandex News
+    independence_group: yandex_news
+    source_type: aggregator
+    scope: football_topic_feed
+    tournaments: [all_football]
+    trust_tier: aggregator
+    source_priority: 3
+    enabled: false
+
+  - id: fanat1k
+    name: Fanat1k
+    url: http://fanat1k.ru/e107_plugins/rss_menu/rss.php?news.2
+    language: ru
+    publisher: Fanat1k
+    independence_group: fanat1k
+    source_type: editorial
+    scope: association_football
+    tournaments: []
+    trust_tier: unrated
+    source_priority: 4
+    enabled: false
