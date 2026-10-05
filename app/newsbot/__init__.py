@@ -1,0 +1,1 @@
+"""NewsBot RSS collection service."""

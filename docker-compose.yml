@@ -1,48 +1,29 @@
-# ─── Сервисы ─────────────────────────────────────────────
 services:
-
-  # Redis — очередь задач и временное хранилище
-  redis:
-    image: redis:7-alpine
-    container_name: newsbot-redis
-    # Порт только на localhost — снаружи недоступен
-    ports:
-      - "127.0.0.1:6379:6379"
-    volumes:
-      # Данные Redis сохраняются в ./data/redis (переживут пересборку)
-      - ./data/redis:/data
-    # Автоперезапуск при падении
-    restart: unless-stopped
-    # Лимит памяти — защита от OOM на 1 ГБ сервере
-    mem_limit: 128m
-    # Внутренняя сеть
-    networks:
-      - newsbot-net
-
-  # Наш Python-код
   app:
     build:
-      # Контекст сборки — папка app/
-      context: ./app
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: app/Dockerfile
     container_name: newsbot-app
-    # Переменные из .env
-    env_file:
-      - .env
-    # Монтируем data/ — чтобы SQLite писался на хост, а не внутрь контейнера
+    environment:
+      NEWSBOT_SOURCES: /app/sources.yaml
+      NEWSBOT_DB: /data/newsbot.sqlite3
+      NEWSBOT_POLL_SECONDS: ${NEWSBOT_POLL_SECONDS:-3600}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      TELEGRAM_CHANNEL_ID: ${TELEGRAM_CHANNEL_ID:-}
+      FILTER_MODEL: ${FILTER_MODEL:-openai/gpt-oss-120b}
+      VISION_MODEL: ${VISION_MODEL:-qwen/qwen3.8-27b}
+      BRIA_API_KEY: ${BRIA_API_KEY:-}
+      NEWSBOT_RAW_RETENTION_DAYS: ${NEWSBOT_RAW_RETENTION_DAYS:-30}
+      NEWSBOT_IMAGE_RETENTION_DAYS: ${NEWSBOT_IMAGE_RETENTION_DAYS:-30}
+      NEWSBOT_AUTOPUBLISH_ENABLED: "false"
+      NEWSBOT_AUTOPUBLISH_DAILY_ROUTINE_LIMIT: ${NEWSBOT_AUTOPUBLISH_DAILY_ROUTINE_LIMIT:-2}
+      NEWSBOT_AUTOPUBLISH_DAILY_MAJOR_LIMIT: ${NEWSBOT_AUTOPUBLISH_DAILY_MAJOR_LIMIT:-4}
     volumes:
-      - ./data:/data
-    # Зависит от Redis (не запустится раньше)
-    depends_on:
-      - redis
+      - newsbot_data:/data
+      - ./asset_import:/imports:ro
     restart: unless-stopped
     mem_limit: 256m
-    networks:
-      - newsbot-net
-    # Команда — пока просто main.py для теста
-    command: python main.py
 
-# ─── Сети ────────────────────────────────────────────────
-networks:
-  newsbot-net:
-    driver: bridge
+volumes:
+  newsbot_data:

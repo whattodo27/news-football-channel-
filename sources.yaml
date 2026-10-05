@@ -1,15 +1,17 @@
 # Candidate football RSS feeds for the first VPS validation.
-# Eight feeds that returned parseable entries in the first VPS check are
-# enabled for the one-week pilot. This is only a one-time availability pass;
-# review their ongoing health and editorial value after the pilot week.
+# The first VPS check was a one-time availability pass, not a stability guarantee.
+# BBC and Guardian are held out of automated collection pending rights clearance.
+# The pilot polls each enabled feed once per hour, staggered across the hour; review feed health and editorial value during the pilot.
 # trust_tier is evidence quality, not a guarantee for every topic:
 # official = primary only for that body's own decisions/results;
 # established = established newsroom; specialist = specialist publication;
 # aggregator = discovery only, never an independent confirmation;
 # unrated = do not use as an auto-publication confirmation until reviewed.
+# Image processing/reuse is off unless image_ai_allowed and image_reuse_allowed are both reviewed and set true for that publisher. Enable reuse only when rights allow publication without an inline source link/credit.
 # source_priority is only a source-level tie-breaker. Per-story news_priority
 # must be computed separately from event type/tournament and stored on stories.
 sources:
+  # Hold until BBC confirms this automated collection/storage use is licensed.
   - id: bbc_football
     name: BBC Sport Football
     url: https://feeds.bbci.co.uk/sport/football/rss.xml
@@ -21,7 +23,7 @@ sources:
     tournaments: [all_football]
     trust_tier: established
     source_priority: 8
-    enabled: true
+    enabled: false
 
   - id: espn_soccer
     name: ESPN Soccer News
@@ -36,6 +38,7 @@ sources:
     source_priority: 7
     enabled: false
 
+  # Guardian terms restrict automated collection and AI use without written approval.
   - id: guardian_football
     name: The Guardian Football
     url: https://www.theguardian.com/football/rss
@@ -47,7 +50,7 @@ sources:
     tournaments: [all_football]
     trust_tier: established
     source_priority: 8
-    enabled: true
+    enabled: false
 
   - id: sport_ru_igor_dobrovolskiy
     name: Sport.ru / Igor Dobrovolskiy RSS
@@ -138,7 +141,7 @@ sources:
     tournaments: [ligue_1]
     trust_tier: established
     source_priority: 7
-    enabled: false
+    enabled: true
 
   - id: transfermarkt_news
     name: Transfermarkt News

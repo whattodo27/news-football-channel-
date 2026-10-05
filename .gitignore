@@ -42,3 +42,9 @@ logs/
 # ─── OS ──────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+generated_images/
+
+# Local images waiting to be imported into the persistent media library
+asset_import/*
+!asset_import/README.md
