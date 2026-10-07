@@ -30,14 +30,36 @@ def refresh_confirmations(db: sqlite3.Connection, eid: int, stamp: str | None = 
         FROM event_articles ea JOIN article_sources a ON a.article_id=ea.article_id
         JOIN sources s ON s.id=a.source_id
         WHERE ea.event_id=? AND s.trust_tier IN ('official','established','specialist')""", (eid,)).fetchone()[0])
-    row = db.execute("SELECT state FROM events WHERE id=?", (eid,)).fetchone()
+    row = db.execute(
+        "SELECT state,ai_state,relevance,relevance_score,importance_score FROM events WHERE id=?",
+        (eid,),
+    ).fetchone()
     if row and row["state"] in {"awaiting_verification", "awaiting_review"}:
-        state = "awaiting_review" if count >= 2 else "awaiting_verification"
-        reason = None if count >= 2 else "Нужно подтверждение от независимого издателя"
-        with db: db.execute("UPDATE events SET confirmation_count=?,state=?,state_reason=?,updated_at=? WHERE id=?",
-                            (count, state, reason, stamp or utc_now(), eid))
+        ai_ready = (
+            row["ai_state"] == "complete"
+            and row["relevance"] == "football"
+            and float(row["relevance_score"] or 0) >= 0.70
+            and int(row["importance_score"] or 0) >= 10
+        )
+        ready_for_review = count >= 2 and ai_ready
+        state = "awaiting_review" if ready_for_review else "awaiting_verification"
+        if ready_for_review:
+            reason = None
+        elif count < 2:
+            reason = "Нужно подтверждение от независимого издателя"
+        elif row["ai_state"] != "complete":
+            reason = "Ожидает AI-оценки футбольной релевантности и важности"
+        else:
+            reason = "Нужна ручная проверка футбольной релевантности"
+        with db:
+            db.execute(
+                "UPDATE events SET confirmation_count=?,state=?,state_reason=?,updated_at=? WHERE id=?",
+                (count, state, reason, stamp or utc_now(), eid),
+            )
     elif row:
-        with db: db.execute("UPDATE events SET confirmation_count=?,updated_at=? WHERE id=?", (count, stamp or utc_now(), eid))
+        with db:
+            db.execute("UPDATE events SET confirmation_count=?,updated_at=? WHERE id=?",
+                       (count, stamp or utc_now(), eid))
     return count
 
 def index_article(db: sqlite3.Connection, article_id: int) -> int:
@@ -53,7 +75,39 @@ def index_article(db: sqlite3.Connection, article_id: int) -> int:
         refresh_confirmations(db, eid, now)
     return eid
 
+def repair_review_queue(db: sqlite3.Connection) -> int:
+    """Move stale review labels back until AI, relevance, importance, and confirmations qualify."""
+    rows = db.execute(
+        """SELECT id,confirmation_count,ai_state,relevance,relevance_score,importance_score
+           FROM events WHERE state='awaiting_review'"""
+    ).fetchall()
+    repaired = 0
+    with db:
+        for row in rows:
+            ai_ready = (
+                row["ai_state"] == "complete"
+                and row["relevance"] == "football"
+                and float(row["relevance_score"] or 0) >= 0.70
+                and int(row["importance_score"] or 0) >= 10
+            )
+            if int(row["confirmation_count"] or 0) >= 2 and ai_ready:
+                continue
+            if int(row["confirmation_count"] or 0) < 2:
+                reason = "Нужно подтверждение от независимого издателя"
+            elif row["ai_state"] != "complete":
+                reason = "Ожидает AI-оценки футбольной релевантности и важности"
+            else:
+                reason = "Нужна ручная проверка футбольной релевантности"
+            db.execute(
+                "UPDATE events SET state='awaiting_verification',state_reason=?,updated_at=? WHERE id=?",
+                (reason, utc_now(), int(row["id"])),
+            )
+            repaired += 1
+    return repaired
+
+
 def index_untracked_articles(db: sqlite3.Connection) -> int:
+    repair_review_queue(db)
     ids = db.execute("SELECT a.id FROM articles a LEFT JOIN event_articles ea ON ea.article_id=a.id WHERE ea.article_id IS NULL ORDER BY a.id").fetchall()
     for row in ids: index_article(db, int(row[0]))
     return len(ids)
