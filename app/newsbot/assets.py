@@ -370,7 +370,7 @@ def remove_asset(db: sqlite3.Connection, asset_id: int) -> None:
 def _main() -> None:
     parser = argparse.ArgumentParser(description="Manage reusable NewsBot backgrounds and football crests.")
     action = parser.add_mutually_exclusive_group(required=True)
-    action.add_argument("--add", type=Path, metavar="IMAGE", help="Import a JPEG or PNG from /imports")
+    action.add_argument("--add", type=Path, metavar="IMAGE", help="Import a JPEG or PNG from /imports or /logos")
     action.add_argument("--list", action="store_true", help="List registered assets")
     action.add_argument("--remove", type=int, metavar="ASSET_ID", help="Remove an asset and its managed file")
     action.add_argument("--import-fclogo", type=Path, metavar="DIR", help="Import permitted team PNGs and country flags from a local FCLOGO copy")

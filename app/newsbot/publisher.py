@@ -10,13 +10,26 @@ API = "https://api.telegram.org/bot{token}/"
 MAX_TEXT = 4096
 
 def _post_content(db: sqlite3.Connection, event_id: int, *, require_approved: bool = True, max_text: int = MAX_TEXT) -> str:
-    row = db.execute("SELECT state,draft_text,ai_state,next_attempt_at,importance_score FROM events WHERE id=?", (event_id,)).fetchone()
+    row = db.execute("""SELECT state,draft_text,ai_state,next_attempt_at,publication_lane,interest_score,
+        match_content_type,match_home_team,match_away_team,match_home_score,match_away_score,
+        match_competition,match_status FROM events WHERE id=?""", (event_id,)).fetchone()
     if row is None: raise ValueError(f"Event {event_id} does not exist")
     if require_approved and row["state"] not in {"approved", "retry_wait"}: raise ValueError(f"Event must be approved or due for retry (state={row['state']})")
     if require_approved and row["state"] == "retry_wait" and row["next_attempt_at"] and row["next_attempt_at"] > utc_now():
         raise ValueError(f"Retry is scheduled for {row['next_attempt_at']}")
     if row["ai_state"] != "complete" or not (row["draft_text"] or "").strip(): raise ValueError("Event has no completed Russian draft")
-    if require_approved and int(row["importance_score"] or 0) < 10: raise ValueError("Event importance is below the 10/10 publication threshold")
+    if require_approved and row["publication_lane"] == "interesting_news":
+        from .editorial import load_rules
+        minimum = int(load_rules()["interesting_news"]["min_interest_score"])
+        if int(row["interest_score"] or 0) < minimum:
+            raise ValueError(f"Event interest is below the {minimum}/10 publication threshold")
+    if require_approved and row["publication_lane"] == "match_results":
+        from .editorial import load_rules, match_result_eligible
+        valid = (row["match_content_type"] == "match_result" and row["match_status"] in {"final", "extra_time"}
+                 and row["match_home_team"] and row["match_away_team"] and row["match_competition"]
+                 and row["match_home_score"] is not None and row["match_away_score"] is not None
+                 and match_result_eligible(row["match_competition"], load_rules())[0])
+        if not valid: raise ValueError("Match result is incomplete or outside the active tournament mode")
     # Source URLs remain internal provenance; public channel captions contain only the editorial copy.
     raw_draft = re.sub(r"https?://\S+|www\.\S+", "", str(row["draft_text"])).strip()
     escaped = html.escape(raw_draft)
@@ -57,9 +70,12 @@ def publish_event(db: sqlite3.Connection, event_id: int) -> None:
     if not chat_id: raise ValueError("TELEGRAM_CHANNEL_ID is not configured")
     _post_content(db, event_id)  # Validate approval and the Russian draft before requesting source-photo selection.
     image_row = db.execute(
-        "SELECT image_path,image_origin,image_generated_at,match_content_type,match_status FROM events WHERE id=?",
+        "SELECT image_path,image_origin,image_generated_at,match_content_type,match_status,publication_lane FROM events WHERE id=?",
         (event_id,),
     ).fetchone()
+    if image_row and image_row["publication_lane"] == "interesting_news":
+        from .editorial import ensure_story_publish_slot
+        ensure_story_publish_slot(db, event_id)
     image_path = image_row["image_path"] if image_row else None
     if image_row and image_row["match_content_type"] == "match_result":
         from .scorecard import generate_scorecard

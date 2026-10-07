@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS events (
  state_reason TEXT, confirmation_count INTEGER NOT NULL DEFAULT 0,
  news_priority TEXT NOT NULL DEFAULT 'routine', official_statement_verified INTEGER NOT NULL DEFAULT 0,
  relevance TEXT NOT NULL DEFAULT 'uncertain', relevance_score REAL,
- importance TEXT NOT NULL DEFAULT 'routine', importance_score INTEGER, draft_text TEXT, ai_state TEXT NOT NULL DEFAULT 'pending',
+ importance TEXT NOT NULL DEFAULT 'routine', importance_score INTEGER, interest_score INTEGER,
+ publication_lane TEXT NOT NULL DEFAULT 'interesting_news', approved_at TEXT,
+ draft_text TEXT, ai_state TEXT NOT NULL DEFAULT 'pending',
  ai_reason TEXT, ai_model TEXT, analyzed_at TEXT, ai_attempts INTEGER NOT NULL DEFAULT 0,
  ai_next_attempt_at TEXT, attempt_count INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT, published_at TEXT,
  telegram_chat_id TEXT, telegram_message_id TEXT, image_path TEXT, image_prompt TEXT, image_generated_at TEXT,
@@ -122,6 +124,9 @@ def connect(path: Path) -> sqlite3.Connection:
         "relevance_score": "REAL",
         "importance": "TEXT NOT NULL DEFAULT 'routine'",
         "importance_score": "INTEGER",
+        "interest_score": "INTEGER",
+        "publication_lane": "TEXT NOT NULL DEFAULT 'interesting_news'",
+        "approved_at": "TEXT",
         "draft_text": "TEXT",
         "ai_state": "TEXT NOT NULL DEFAULT 'pending'",
         "ai_reason": "TEXT",
@@ -145,6 +150,8 @@ def connect(path: Path) -> sqlite3.Connection:
     for name, definition in migrations.items():
         if name not in event_columns:
             connection.execute(f"ALTER TABLE events ADD COLUMN {name} {definition}")
+    connection.execute("UPDATE events SET publication_lane='match_results' WHERE match_content_type='match_result' AND publication_lane!='match_results'")
+    connection.execute("UPDATE events SET state='awaiting_verification',state_reason='Требуется новая редакционная оценка',ai_state='pending',ai_next_attempt_at=NULL WHERE ai_state='complete' AND interest_score IS NULL AND match_content_type!='match_result' AND state IN ('awaiting_verification','awaiting_review','approved','retry_wait')")
     return connection
 
 def sync_sources(connection: sqlite3.Connection, sources: list[dict[str, Any]], now: str) -> None:

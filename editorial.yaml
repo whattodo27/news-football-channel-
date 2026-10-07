@@ -1,0 +1,90 @@
+interesting_news:
+  # Верхний предел за календарный день по московскому времени.
+  daily_limit: 2
+  # Минимальная оценка интересности для редакционной очереди.
+  min_interest_score: 7
+
+match_results:
+  # selected: результаты только из выбранных крупных соревнований.
+  # tournament: выбранные соревнования плюс все матчи активного турнира.
+  mode: selected
+  selected_competitions:
+    - name: "Российская Премьер-Лига"
+      aliases:
+        - РПЛ
+        - Russian Premier League
+        - Russian Premier Liga
+    - name: "Кубок России"
+      aliases:
+        - Кубок России по футболу
+        - Russian Cup
+        - Russian Football Cup
+    - name: "Лига чемпионов"
+      aliases:
+        - UEFA Champions League
+        - Champions League
+    - name: "Лига Европы"
+      aliases:
+        - UEFA Europa League
+        - Europa League
+    - name: "Лига конференций"
+      aliases:
+        - UEFA Conference League
+        - Conference League
+    - name: "Чемпионат мира"
+      aliases:
+        - FIFA World Cup
+        - World Cup
+    - name: "Чемпионат Европы"
+      aliases:
+        - UEFA Euro
+        - EURO
+        - European Championship
+    - name: "Английская Премьер-лига"
+      aliases:
+        - Premier League
+        - English Premier League
+    - name: "Чемпионат Испании"
+      aliases:
+        - La Liga
+        - Spanish La Liga
+    - name: "Чемпионат Германии"
+      aliases:
+        - Bundesliga
+    - name: "Чемпионат Италии"
+      aliases:
+        - Serie A
+        - Italian Serie A
+    - name: "Чемпионат Франции"
+      aliases:
+        - Ligue 1
+        - French Ligue 1
+    - name: "Кубок Америки"
+      aliases:
+        - Copa America
+        - CONMEBOL Copa America
+    - name: "Лига наций УЕФА"
+      aliases:
+        - UEFA Nations League
+        - Nations League
+    - name: "Клубный чемпионат мира"
+      aliases:
+        - FIFA Club World Cup
+        - Club World Cup
+    - name: "Кубок Либертадорес"
+      aliases:
+        - CONMEBOL Libertadores
+        - Copa Libertadores
+    - name: "Чемпионат Нидерландов"
+      aliases:
+        - Eredivisie
+    - name: "Чемпионат Португалии"
+      aliases:
+        - Primeira Liga
+        - Liga Portugal
+    - name: "Чемпионат Бразилии"
+      aliases:
+        - Brasileirão
+        - Brazilian Serie A
+  active_tournament: ""
+  tournament_aliases: []

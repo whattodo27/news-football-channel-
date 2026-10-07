@@ -8,4 +8,5 @@ COPY app/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./
 COPY sources.yaml ./sources.yaml
+COPY editorial.yaml ./editorial.yaml
 CMD ["python", "-m", "newsbot.main"]

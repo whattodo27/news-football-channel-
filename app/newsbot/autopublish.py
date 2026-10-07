@@ -19,14 +19,6 @@ def autopublish_enabled() -> bool:
     return os.getenv("NEWSBOT_AUTOPUBLISH_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _daily_limits() -> tuple[int, int]:
-    routine = int(os.getenv("NEWSBOT_AUTOPUBLISH_DAILY_ROUTINE_LIMIT", "2"))
-    major = int(os.getenv("NEWSBOT_AUTOPUBLISH_DAILY_MAJOR_LIMIT", "4"))
-    if not 0 <= routine <= 20 or not 0 <= major <= 20:
-        raise ValueError("Autopublish daily limits must be between 0 and 20")
-    return routine, major
-
-
 def _today_window() -> tuple[str, str]:
     now = datetime.now(LOCAL_ZONE)
     start = datetime.combine(now.date(), time.min, tzinfo=LOCAL_ZONE).astimezone(timezone.utc)
@@ -52,26 +44,26 @@ def _publish_in_isolated_connection(db_path: str, event_id: int) -> None:
 
 
 async def run_autopublish_cycle(db: sqlite3.Connection) -> int:
-    """Disabled by default; only publishes events that a human has explicitly approved."""
+    """Disabled by default; publishes only events explicitly approved by a human."""
     if not autopublish_enabled():
         return 0
-    routine_limit, major_limit = _daily_limits()
+    from .editorial import ensure_story_publish_slot, load_rules, match_result_eligible
+
+    rules = load_rules()
+    story_limit = int(rules["interesting_news"]["daily_limit"])
     start, end = _today_window()
-    counts = {
-        row["news_priority"]: int(row["count"])
-        for row in db.execute(
-            """SELECT news_priority,COUNT(*) AS count FROM events
-               WHERE state='published' AND published_at>=? AND published_at<?
-               GROUP BY news_priority""", (start, end)
-        ).fetchall()
-    }
+    story_count = int(db.execute(
+        """SELECT COUNT(*) FROM events WHERE publication_lane='interesting_news' AND state='published'
+           AND published_at>=? AND published_at<?""", (start, end)
+    ).fetchone()[0])
     due = db.execute(
-        """SELECT id,news_priority FROM events
+        """SELECT id,publication_lane,match_competition FROM events
            WHERE state IN ('approved','retry_wait')
              AND (state!='retry_wait' OR next_attempt_at IS NULL OR next_attempt_at<=?)
-             AND ai_state='complete' AND relevance='football' AND importance_score>=10
+             AND ai_state='complete' AND relevance='football'
              AND draft_text IS NOT NULL AND trim(draft_text)!=''
-           ORDER BY CASE news_priority WHEN 'major_match' THEN 0 ELSE 1 END,created_at,id""",
+           ORDER BY CASE publication_lane WHEN 'match_results' THEN 0 ELSE 1 END,
+                    interest_score DESC,created_at,id""",
         (utc_now(),),
     ).fetchall()
     db_path = _db_path(db)
@@ -80,14 +72,14 @@ async def run_autopublish_cycle(db: sqlite3.Connection) -> int:
         return 0
     sent = 0
     for row in due:
-        priority = str(row["news_priority"])
-        count = counts.get(priority, 0)
-        limit = major_limit if priority == "major_match" else routine_limit
-        if count >= limit:
+        lane = str(row["publication_lane"])
+        if lane == "interesting_news" and story_count >= story_limit:
+            continue
+        if lane == "match_results" and not match_result_eligible(row["match_competition"], rules)[0]:
             continue
         try:
             await asyncio.to_thread(_publish_in_isolated_connection, str(db_path), int(row["id"]))
-            counts[priority] = count + 1
+            if lane == "interesting_news": story_count += 1
             sent += 1
         except Exception as exc:
             LOGGER.warning("autopublish stopped at event=%d error=%s", int(row["id"]), type(exc).__name__)
