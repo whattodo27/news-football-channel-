@@ -180,7 +180,7 @@ async def collect_cycle(client: httpx.AsyncClient, connection: Any,
         totals["sources"],totals["ok"],totals["failed"],totals["entries"],totals["new"],totals["duplicates"])
     return totals
 
-async def run_collector(connection: Any,sources: list[dict[str, Any]],poll_seconds: int,once: bool) -> None:
+async def run_collector(connection: Any,sources: list[dict[str, Any]],poll_seconds: int,once: bool, db_path: Any = None) -> None:
     timeout = httpx.Timeout(25.0,connect=10.0)
     headers = {"User-Agent":USER_AGENT,
         "Accept":"application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.5"}
@@ -191,6 +191,9 @@ async def run_collector(connection: Any,sources: list[dict[str, Any]],poll_secon
             spacing = poll_seconds / enabled_count if enabled_count > 1 and not once else 0
             await collect_cycle(client,connection,sources,spacing_seconds=spacing)
             await analyze_pending(connection)
+            if not once and db_path is not None:
+                from .telegram_review import notify_review_queue
+                await notify_review_queue(connection, db_path)
             await run_autopublish_cycle(connection)
             cleanup_old_content(connection)
             if once: return

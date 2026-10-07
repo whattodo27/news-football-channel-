@@ -127,6 +127,8 @@ def connect(path: Path) -> sqlite3.Connection:
         "interest_score": "INTEGER",
         "publication_lane": "TEXT NOT NULL DEFAULT 'interesting_news'",
         "approved_at": "TEXT",
+        "review_notified_at": "TEXT",
+        "review_message_id": "TEXT",
         "draft_text": "TEXT",
         "ai_state": "TEXT NOT NULL DEFAULT 'pending'",
         "ai_reason": "TEXT",

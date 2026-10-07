@@ -144,7 +144,7 @@ def _rank(event: dict[str,str],items: list[dict[str,Any]],key: str,model: str):
 def select_event_image(db: sqlite3.Connection,eid: int,force: bool=False) -> str:
     event=db.execute("SELECT id,title,draft_text,state,image_path,image_origin,image_generated_at FROM events WHERE id=?",(eid,)).fetchone()
     if not event: raise ValueError(f"Event {eid} does not exist")
-    if event["state"] not in {"approved","retry_wait"}: raise ValueError("Select an image only after event approval")
+    if event["state"] not in {"awaiting_review","approved","retry_wait"}: raise ValueError("Select an image only for a reviewable or approved event")
     if event["image_path"] and Path(event["image_path"]).is_file() and event["image_origin"] and not event["image_generated_at"] and not force: return event["image_path"]
     key=os.getenv("GROQ_API_KEY")
     if not key: raise ValueError("GROQ_API_KEY is required for visual image selection")
