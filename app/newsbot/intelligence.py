@@ -62,6 +62,29 @@ def _recent_ids(db: sqlite3.Connection, force: bool = False) -> tuple[list[int],
                 "source_name":r["source_name"],"independence_group":r["independence_group"],
                 "source_type":r["source_type"],"trust_tier":r["trust_tier"],"language":r["language"],
                 "excerpt":(r["summary"] or r["content"] or "")[:320],"url":r["link"]})
+    missing_ids = sorted(set(ids) - set(by_id))
+    if missing_ids:
+        marks = ",".join("?" for _ in missing_ids)
+        present = {int(row[0]) for row in db.execute(
+            f"SELECT id FROM events WHERE id IN ({marks})", missing_ids
+        ).fetchall()}
+        orphan_ids = sorted(present)
+        if orphan_ids:
+            orphan_marks = ",".join("?" for _ in orphan_ids)
+            with db:
+                db.execute(
+                    f"""UPDATE events SET state='awaiting_verification',
+                        state_reason='Нет связанных RSS-статей для автоматической оценки',
+                        ai_state='complete', ai_reason='No linked RSS articles available for AI analysis',
+                        ai_next_attempt_at=NULL, updated_at=?
+                        WHERE id IN ({orphan_marks}) AND state IN ('awaiting_verification','awaiting_review')""",
+                    [now, *orphan_ids],
+                )
+            LOGGER.warning("AI candidates lack linked RSS articles; moved to manual verification ids=%s", orphan_ids)
+        removed_ids = sorted(set(missing_ids) - present)
+        if removed_ids:
+            LOGGER.info("AI candidates removed by a concurrent merge; ignoring ids=%s", removed_ids)
+        ids = [event_id for event_id in ids if event_id in by_id]
     context_rows = db.execute("""SELECT id,title,event_date,confirmation_count,draft_text FROM events
         WHERE event_date>=? AND state IN ('awaiting_verification','awaiting_review') AND ai_state='complete'
         ORDER BY event_date DESC,id DESC LIMIT ?""", (cutoff, MAX_CONTEXT)).fetchall()
