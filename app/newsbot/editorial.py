@@ -12,9 +12,10 @@ import yaml
 
 MOSCOW = ZoneInfo("Europe/Moscow")
 DEFAULTS: dict[str, Any] = {
-    "interesting_news": {"daily_limit": 2, "min_interest_score": 7},
+    "interesting_news": {"daily_limit": 2, "min_interest_score": 7, "min_independent_publishers": 1},
     "match_results": {
         "mode": "selected",
+        "min_independent_publishers": 2,
         "selected_competitions": [],
         "active_tournament": "",
         "tournament_aliases": [],
@@ -43,6 +44,10 @@ def load_rules() -> dict[str, Any]:
         raise ValueError("interesting_news.daily_limit must be 1 or 2")
     if not 0 <= score <= 10:
         raise ValueError("interesting_news.min_interest_score must be between 0 and 10")
+    for lane in ("interesting_news", "match_results"):
+        minimum = int(rules[lane]["min_independent_publishers"])
+        if minimum not in {1, 2}:
+            raise ValueError(f"{lane}.min_independent_publishers must be 1 or 2")
     match_rules = rules["match_results"]
     if match_rules["mode"] not in {"selected", "tournament"}:
         raise ValueError("match_results.mode must be selected or tournament")
@@ -61,6 +66,13 @@ def load_rules() -> dict[str, Any]:
     if not isinstance(aliases, list) or any(not isinstance(alias, str) for alias in aliases):
         raise ValueError("match_results.tournament_aliases must be a list of strings")
     return rules
+
+
+def min_independent_publishers(lane: str, rules: dict[str, Any] | None = None) -> int:
+    rules = rules or load_rules()
+    if lane not in {"interesting_news", "match_results"}:
+        raise ValueError(f"Unknown publication lane: {lane}")
+    return int(rules[lane]["min_independent_publishers"])
 
 
 def _competition_matches(candidate: str, names: list[str]) -> bool:

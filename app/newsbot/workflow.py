@@ -5,7 +5,7 @@ from email.utils import parsedate_to_datetime
 from html import unescape
 
 TIERS = ("official", "established", "specialist")
-from .editorial import ensure_story_approval_slot, load_rules, match_result_eligible
+from .editorial import ensure_story_approval_slot, load_rules, match_result_eligible, min_independent_publishers
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -61,12 +61,13 @@ def refresh_confirmations(db: sqlite3.Connection, eid: int, stamp: str | None = 
     ).fetchone()
     if row and row["state"] in {"awaiting_verification", "awaiting_review"}:
         ai_ready = editorial_review_ready(row)
-        ready_for_review = count >= 2 and ai_ready
+        required = min_independent_publishers(row["publication_lane"], load_rules())
+        ready_for_review = count >= required and ai_ready
         state = "awaiting_review" if ready_for_review else "awaiting_verification"
         if ready_for_review:
             reason = None
-        elif count < 2:
-            reason = "Нужно подтверждение от независимого издателя"
+        elif count < required:
+            reason = f"Недостаточно независимых подтверждений (нужно: {required})"
         else:
             reason = editorial_failure_reason(row)
         with db:
@@ -100,12 +101,13 @@ def repair_review_queue(db: sqlite3.Connection) -> int:
     rules = load_rules()
     with db:
         for row in rows:
-            ready = int(row["confirmation_count"] or 0) >= 2 and editorial_review_ready(row)
+            required = min_independent_publishers(row["publication_lane"], rules)
+            ready = int(row["confirmation_count"] or 0) >= required and editorial_review_ready(row)
             target_state = "awaiting_review" if ready else "awaiting_verification"
             if ready:
                 reason = None
-            elif int(row["confirmation_count"] or 0) < 2:
-                reason = "Нужно подтверждение от независимого издателя"
+            elif int(row["confirmation_count"] or 0) < required:
+                reason = f"Недостаточно независимых подтверждений (нужно: {required})"
             else:
                 reason = editorial_failure_reason(row)
             if row["state"] == target_state and row["state_reason"] == reason:
@@ -153,8 +155,9 @@ def approve_event(db: sqlite3.Connection, eid: int, priority: str | None = None,
     priority = priority or row["news_priority"]
     official = db.execute("""SELECT 1 FROM event_articles ea JOIN article_sources a ON a.article_id=ea.article_id
         JOIN sources s ON s.id=a.source_id WHERE ea.event_id=? AND s.source_type='official' LIMIT 1""", (eid,)).fetchone()
-    if int(row["confirmation_count"]) < 2 and not (official_statement and official):
-        raise ValueError("Need two independent publishers, or explicitly verify the organization's own official statement")
+    required = min_independent_publishers(row["publication_lane"], load_rules())
+    if int(row["confirmation_count"]) < required and not (official_statement and official):
+        raise ValueError(f"Need {required} independent publisher(s), or verify the organization's official statement")
     if row["publication_lane"] == "interesting_news":
         ensure_story_approval_slot(db)
     with db:

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 import httpx
 from .workflow import refresh_confirmations, utc_now
-from .editorial import load_rules, match_result_eligible
+from .editorial import load_rules, match_result_eligible, min_independent_publishers
 
 LOGGER = logging.getLogger(__name__)
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -239,17 +239,19 @@ def _apply_result(db: sqlite3.Connection, pending_ids: list[int], events: list[d
                 state, state_reason = "awaiting_verification", "Не удалось подтвердить команды, турнир, точный счёт и статус завершённого матча"
             elif not eligible:
                 state, state_reason = "awaiting_verification", mode_reason
-            elif count >= 2:
+            elif count >= min_independent_publishers(lane, rules):
                 state, state_reason = "awaiting_review", None
             else:
-                state, state_reason = "awaiting_verification", "Нужно подтверждение счёта от второго независимого издателя"
+                required = min_independent_publishers(lane, rules)
+                state, state_reason = "awaiting_verification", f"Недостаточно подтверждений счёта (нужно независимых издателей: {required})"
         elif interest_score < int(rules["interesting_news"]["min_interest_score"]):
             minimum = int(rules["interesting_news"]["min_interest_score"])
             state, state_reason = "skipped", f"Интересность {interest_score}/10 ниже порога редакционной очереди {minimum}/10"
-        elif count >= 2:
+        elif count >= min_independent_publishers(lane, rules):
             state, state_reason = "awaiting_review", None
         else:
-            state, state_reason = "awaiting_verification", "Недостаточно подтверждений от независимых издателей"
+            required = min_independent_publishers(lane, rules)
+            state, state_reason = "awaiting_verification", f"Недостаточно независимых подтверждений (нужно: {required})"
         if relevance != "football" or score < 0.70:
             draft = ""
         priority = "major_match" if importance == "major_match" else "routine"
