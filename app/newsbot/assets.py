@@ -316,6 +316,39 @@ def add_asset(
         raise
 
 
+def import_background_directory(
+    db: sqlite3.Connection,
+    root: Path,
+    license_name: str,
+    credit: str | None = None,
+    source_url: str | None = None,
+) -> dict[str, int]:
+    """Import direct JPEG/PNG children idempotently into the persistent media library."""
+    if not license_name.strip():
+        raise ValueError("License or usage permission is required")
+    root = root.resolve()
+    if not root.is_dir():
+        raise ValueError(f"Background folder does not exist: {root}")
+
+    imported = duplicates = skipped = 0
+    for source in sorted(path for path in root.iterdir() if path.is_file()):
+        try:
+            _detect_image(source)
+        except ValueError as exc:
+            LOGGER.warning("skipping background path=%s error=%s", source.name, exc)
+            skipped += 1
+            continue
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        existing = db.execute("SELECT id FROM media_assets WHERE sha256=?", (digest,)).fetchone()
+        if existing:
+            duplicates += 1
+            continue
+        name = source.stem.replace("_", " ").replace("-", " ").strip().title()
+        add_asset(db, source, "background", name, license_name,
+                  source_url=source_url, credit=credit)
+        imported += 1
+    return {"imported": imported, "duplicates": duplicates, "skipped": skipped}
+
 def list_assets(db: sqlite3.Connection, asset_type: str | None = None) -> list[sqlite3.Row]:
     if asset_type and asset_type not in {"background", "crest"}:
         raise ValueError("Asset type must be background or crest")
@@ -345,7 +378,7 @@ def choose_background(db: sqlite3.Connection, asset_id: int | None = None) -> sq
         ).fetchone()
     else:
         row = db.execute(
-            "SELECT * FROM media_assets WHERE asset_type='background' AND enabled=1 ORDER BY last_used_at IS NOT NULL,last_used_at,id LIMIT 1"
+            "SELECT * FROM media_assets WHERE asset_type='background' AND enabled=1 ORDER BY random() LIMIT 1"
         ).fetchone()
     if row and Path(row["file_path"]).is_file():
         with db:
@@ -374,6 +407,7 @@ def _main() -> None:
     action.add_argument("--list", action="store_true", help="List registered assets")
     action.add_argument("--remove", type=int, metavar="ASSET_ID", help="Remove an asset and its managed file")
     action.add_argument("--import-fclogo", type=Path, metavar="DIR", help="Import permitted team PNGs and country flags from a local FCLOGO copy")
+    action.add_argument("--import-backgrounds", type=Path, metavar="DIR", help="Import JPEG/PNG backgrounds from a folder into the persistent library")
     parser.add_argument("--type", choices=("background", "crest"))
     parser.add_argument("--name")
     parser.add_argument("--team-key", help="Stable team key for a crest, e.g. zenit")
@@ -396,6 +430,12 @@ def _main() -> None:
         elif args.remove is not None:
             remove_asset(db, args.remove)
             print(f"Удалён ресурс #{args.remove}")
+        elif args.import_backgrounds is not None:
+            if not args.license_name:
+                parser.error("--import-backgrounds requires --license")
+            counts = import_background_directory(db, args.import_backgrounds, args.license_name,
+                                                 args.credit, args.source_url)
+            print("Импорт фонов: " + ", ".join(f"{key}={value}" for key, value in counts.items()))
         elif args.import_fclogo is not None:
             counts = import_fclogo_collection(db, args.import_fclogo)
             print("Импорт FCLOGO: " + ", ".join(f"{key}={value}" for key, value in counts.items()))
