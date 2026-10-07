@@ -73,14 +73,14 @@ def _recent_ids(db: sqlite3.Connection, force: bool = False) -> tuple[list[int],
             orphan_marks = ",".join("?" for _ in orphan_ids)
             with db:
                 db.execute(
-                    f"""UPDATE events SET state='awaiting_verification',
-                        state_reason='Нет связанных RSS-статей для автоматической оценки',
+                    f"""UPDATE events SET state='skipped',
+                        state_reason='Пропущено: нет связанных RSS-статей для AI-оценки',
                         ai_state='complete', ai_reason='No linked RSS articles available for AI analysis',
                         ai_next_attempt_at=NULL, updated_at=?
                         WHERE id IN ({orphan_marks}) AND state IN ('awaiting_verification','awaiting_review')""",
                     [now, *orphan_ids],
                 )
-            LOGGER.warning("AI candidates lack linked RSS articles; moved to manual verification ids=%s", orphan_ids)
+            LOGGER.warning("AI candidates lack linked RSS articles; skipped ids=%s", orphan_ids)
         removed_ids = sorted(set(missing_ids) - present)
         if removed_ids:
             LOGGER.info("AI candidates removed by a concurrent merge; ignoring ids=%s", removed_ids)
