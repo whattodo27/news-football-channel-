@@ -27,10 +27,12 @@ HEADLINE_FALLBACK_WORDS = 5
 SYSTEM_PROMPT = (
     "Ты редактор заголовков футбольного Telegram-канала. Сократи новость до короткого, "
     "живого, интригующего заголовка из 2–5 слов на русском языке в тоне спортивного "
-    "комментатора. Сохрани суть: кто (субъект) и что (событие или заявление), но оставь "
-    "развязку открытой, чтобы читатель захотел открыть пост. Не обрезай слово посередине. "
-    "Без эмодзи, кавычек-ёлочек, точки, многоточия или лишней пунктуации. Верни ровно "
-    "заголовок, без пояснений и обрамления."
+    "комментатора, по схеме «субъект + глагол действия»: назови главного героя и его действие "
+    "или заявление, но скрой сам предмет (что именно он сделал, сказал, подтвердил), чтобы "
+    "читатель захотел открыть пост. Заверши заголовок многоточием «…». Примеры: "
+    "«Некрасов подтвердил…», «Месси объявил…», «Зенит договорился…». Не обрезай слово "
+    "посередине. Без эмодзи, кавычек-ёлочек и точки. Верни ровно заголовок с многоточием "
+    "в конце, без пояснений и обрамления."
 )
 
 
@@ -39,13 +41,16 @@ def _key_and_model() -> tuple[str | None, str]:
 
 
 def _normalize(text: str) -> str:
-    """Strip wrappers/punctuation and hard-cap the word count to HEADLINE_MAX_WORDS."""
-    text = text.strip().strip("«»\"'“”‘’…").strip()
+    """Strip wrappers/punctuation, hard-cap the word count, and ensure a trailing ellipsis."""
+    text = text.strip().strip("«»\"'“”‘’").strip()
     text = " ".join(text.split())
-    words = text.split()
+    words = [w for w in text.split() if w]
     if len(words) > HEADLINE_MAX_WORDS:
         words = words[:HEADLINE_MAX_WORDS]
-    return " ".join(words).rstrip(" ,.;:!-—–…").strip()
+    text = " ".join(words).rstrip(" ,.;:!-—–…").strip()
+    if text and not text.endswith("…"):
+        text += "…"
+    return text
 
 
 def _fallback_headline(title: str, draft: str) -> str | None:
@@ -60,7 +65,7 @@ def _fallback_headline(title: str, draft: str) -> str | None:
         words.append(clean)
     if not words:
         return None
-    return " ".join(words[:HEADLINE_FALLBACK_WORDS]).rstrip(" ,.;:!-—–…").strip() or None
+    return " ".join(words[:HEADLINE_FALLBACK_WORDS]).rstrip(" ,.;:!-—–…").strip() + "…"
 
 
 def _request(title: str, draft: str, key: str, model: str) -> str:

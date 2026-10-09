@@ -102,7 +102,17 @@ def _commons(query: str) -> list[dict[str,Any]]:
         info=(page.get("imageinfo") or [{}])[0]; meta=info.get("extmetadata") or {}
         lic=html.unescape(str((meta.get("LicenseShortName") or {}).get("value",""))).strip()
         usage=html.unescape(str((meta.get("UsageTerms") or {}).get("value",""))).strip()
-        if not any(x in f"{lic} {usage}".lower() for x in ("cc0","public domain","public-domain")): continue
+        # Commons hosts only free-licensed media. Accept the free pool (CC0 / public
+        # domain / GFDL / CC-BY / CC-BY-SA / CC-BY-NC*) so a real person/club photo can
+        # actually be used for a non-commercial fan newsroom. Skip no-derivatives ("ND")
+        # licences, because compositing a photo onto a card is a derivative work, and skip
+        # any licence text that is not recognisably free. Whitespace is collapsed because
+        # Commons short-names vary between "CC BY" and "CC-BY".
+        licence_text = re.sub(r"\s+", "", f"{lic} {usage}").lower()
+        if re.search(r"-nd(?=[0-9.\-]|$)", licence_text):
+            continue
+        if not re.search(r"cc0|public.?domain|cc-by|ccby|gfdl|creative.?commons", licence_text):
+            continue
         u=info.get("url"); pageurl=info.get("descriptionurl") or ""
         if not isinstance(u,str) or not safe_url(u): continue
         artist=html.unescape(re.sub("<[^>]+>","",str((meta.get("Artist") or {}).get("value",""))))[:200]
