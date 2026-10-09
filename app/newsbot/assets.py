@@ -122,10 +122,19 @@ def _register_flag_alias(db: sqlite3.Connection, code: str, alias: str) -> None:
                    (code, display, normalized))
 
 
-def _import_country_flags(db: sqlite3.Connection, root: Path) -> tuple[int, int]:
+def _find_flags_yaml(root: Path) -> Path | None:
+    """Locate flags.yaml in the FCLOGO tree, tolerating a double-nested countries dir."""
+    for candidate in (root / "countries" / "flags.yaml",
+                      root / "countries" / "countries" / "flags.yaml"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _import_country_flags(db: sqlite3.Connection, flags_yaml: Path) -> tuple[int, int]:
     import yaml
 
-    flags_yaml = root / "countries" / "flags.yaml"
+    base = flags_yaml.parent  # relative flag paths resolve against this directory
     manifest = yaml.safe_load(flags_yaml.read_text(encoding="utf-8")) or []
     copied = skipped = 0
     for row in manifest:
@@ -134,7 +143,7 @@ def _import_country_flags(db: sqlite3.Connection, root: Path) -> tuple[int, int]
         if not code or not relative:
             skipped += 1
             continue
-        source = root / "countries" / relative
+        source = base / relative
         if not source.is_file():
             skipped += 1
             continue
@@ -218,7 +227,8 @@ def import_fclogo_collection(db: sqlite3.Connection, root: Path) -> dict[str, in
     """Import current, non-doubtful team PNGs and country flags from a permissioned local copy."""
     root = root.resolve()
     logos_root = root / "logos"
-    if not logos_root.is_dir() or not (root / "countries" / "flags.yaml").is_file():
+    flags_yaml = _find_flags_yaml(root)
+    if not logos_root.is_dir() or flags_yaml is None:
         raise ValueError("Folder must contain logos/ and countries/flags.yaml from the local FCLOGO collection")
     imported = duplicates = skipped = 0
     directories = sorted([*logos_root.glob("*/clubs/*"), *logos_root.glob("*/team/*")])
@@ -252,7 +262,7 @@ def import_fclogo_collection(db: sqlite3.Connection, root: Path) -> dict[str, in
             else:
                 LOGGER.warning("skipping team logo path=%s error=%s", source.relative_to(root), exc)
                 skipped += 1
-    imported_flags, skipped_flags = _import_country_flags(db, root)
+    imported_flags, skipped_flags = _import_country_flags(db, flags_yaml)
     return {"team_imported": imported, "team_duplicates": duplicates, "team_skipped": skipped,
             "flags_imported": imported_flags, "flags_skipped": skipped_flags}
 
