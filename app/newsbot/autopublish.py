@@ -9,7 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .db import connect
-from .workflow import utc_now
+from .workflow import approve_event, utc_now
 
 LOGGER = logging.getLogger(__name__)
 LOCAL_ZONE = ZoneInfo("Europe/Moscow")
@@ -43,14 +43,39 @@ async def _publish_in_isolated_connection(db_path: str, event_id: int) -> None:
         connection.close()
 
 
+def auto_approve_pending(db: sqlite3.Connection) -> int:
+    """Approve every review-ready event in autonomous mode, respecting daily limits.
+
+    Reuses the same gate as manual review (editorial readiness, independent
+    confirmations, and the interesting_news daily limit), so over-quota or
+    not-ready events are skipped rather than published.
+    """
+    rows = db.execute(
+        """SELECT id FROM events WHERE state='awaiting_review'
+           ORDER BY CASE publication_lane WHEN 'match_results' THEN 0 ELSE 1 END,
+                    interest_score DESC, created_at ASC, id ASC"""
+    ).fetchall()
+    approved = 0
+    for row in rows:
+        try:
+            approve_event(db, int(row["id"]))
+            approved += 1
+        except ValueError as exc:
+            LOGGER.info("auto-approve skipped event=%s (%s)", row["id"], exc)
+    if approved:
+        LOGGER.info("auto-approved %d event(s) for publication", approved)
+    return approved
+
+
 async def run_autopublish_cycle(db: sqlite3.Connection) -> int:
-    """Disabled by default; publishes only events explicitly approved by a human."""
+    """Autonomous cycle: auto-approve review-ready events, then publish approved ones."""
     if not autopublish_enabled():
         return 0
     from .editorial import load_rules, match_result_eligible
     from .publisher import recover_stale_publishing
 
     recover_stale_publishing(db)
+    auto_approve_pending(db)
     rules = load_rules()
     story_limit = int(rules["interesting_news"]["daily_limit"])
     start, end = _today_window()

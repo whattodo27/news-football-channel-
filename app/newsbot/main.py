@@ -31,8 +31,9 @@ async def main() -> None:
     cleanup_old_content(connection)
     # Deferred: mem_limit 256m / _gradient_background Pillow cost; get_source unrated (fanat1k);
     # collect_cycle semaphore 2–4 for parallel RSS.
+    from .autopublish import autopublish_enabled
     review_task = None
-    if not args.once and os.getenv("BOT_TOKEN"):
+    if not args.once and os.getenv("BOT_TOKEN") and not autopublish_enabled():
         from .telegram_review import run_review_bot
         review_task = asyncio.create_task(run_review_bot(db_path))
     try:

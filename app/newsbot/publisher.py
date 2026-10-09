@@ -22,6 +22,15 @@ def _allow_formatting(escaped: str) -> str:
     return escaped
 
 
+def _image_credit_suffix(db: sqlite3.Connection, event_id: int) -> str:
+    """Inline photo attribution line for the caption, or '' when there is nothing to credit."""
+    row = db.execute("SELECT image_credit FROM events WHERE id=?", (event_id,)).fetchone()
+    credit = str(row["image_credit"] or "").strip() if row else ""
+    if not credit:
+        return ""
+    return f"\n\n<i>📸 Фото: {html.escape(credit[:120])}</i>"
+
+
 def _post_content(db: sqlite3.Connection, event_id: int, *, require_approved: bool = True, max_text: int = MAX_TEXT) -> str:
     row = db.execute("""SELECT state,draft_text,ai_state,next_attempt_at,publication_lane,interest_score,
         match_content_type,match_home_team,match_away_team,match_home_score,match_away_score,
@@ -180,7 +189,13 @@ async def publish_event(db: sqlite3.Connection, event_id: int) -> None:
         image_path = generate_scorecard(db, event_id)
     else:
         image_path = _resolve_news_image(db, event_id, image_row)
-    text = _post_content(db, event_id, max_text=1024 if image_path else MAX_TEXT)
+    if image_path and image_row and image_row["match_content_type"] != "match_result":
+        credit_suffix = _image_credit_suffix(db, event_id)
+        text = _post_content(db, event_id, max_text=1024 - len(credit_suffix))
+        if credit_suffix:
+            text = text + credit_suffix
+    else:
+        text = _post_content(db, event_id, max_text=1024 if image_path else MAX_TEXT)
     prior = db.execute("SELECT attempt_count FROM events WHERE id=?", (event_id,)).fetchone()
     with db:
         db.execute("UPDATE events SET state='publishing',state_reason=NULL,attempt_count=attempt_count+1,updated_at=? WHERE id=?", (utc_now(), event_id))

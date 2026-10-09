@@ -9,7 +9,7 @@ import feedparser, httpx
 from .db import conditional_headers, record_source_result
 from .workflow import index_article
 from .intelligence import analyze_pending
-from .autopublish import run_autopublish_cycle
+from .autopublish import autopublish_enabled, run_autopublish_cycle
 from .retention import cleanup_old_content
 
 LOGGER = logging.getLogger(__name__)
@@ -191,7 +191,7 @@ async def run_collector(connection: Any,sources: list[dict[str, Any]],poll_secon
             spacing = poll_seconds / enabled_count if enabled_count > 1 and not once else 0
             await collect_cycle(client,connection,sources,spacing_seconds=spacing)
             await analyze_pending(connection)
-            if not once and db_path is not None:
+            if not once and db_path is not None and not autopublish_enabled():
                 from .telegram_review import notify_review_queue
                 await notify_review_queue(connection, db_path)
             await run_autopublish_cycle(connection)

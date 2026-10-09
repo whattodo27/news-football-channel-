@@ -331,7 +331,7 @@ def generate_news_card(db: sqlite3.Connection, event_id: int,
     image; otherwise a crest/flag resolved from the title is overlaid, and if neither
     resolves only the background + headline are drawn. No score line, no brand.
     """
-    event = db.execute("SELECT id,title FROM events WHERE id=?", (event_id,)).fetchone()
+    event = db.execute("SELECT id,title,image_credit,image_license FROM events WHERE id=?", (event_id,)).fetchone()
     if not event:
         raise ValueError(f"Event {event_id} does not exist")
     from .headline import generate_headline
@@ -402,8 +402,21 @@ def generate_news_card(db: sqlite3.Connection, event_id: int,
         "rss": "RSS/Commons фото на фоновой карточке",
         "ai": "ИИ-фото на фоновой карточке",
     }.get(photo_origin, "Текстовая карточка (фон + заголовок)")
-    license_name = background_asset["license"] if background_asset and background_asset["license"] else None
-    credit = background_asset["credit"] if background_asset and background_asset["credit"] else None
+    credits: list[str] = []
+    licenses: list[str] = []
+    if photo_origin == "rss":
+        photo_credit = str(event["image_credit"] or "").strip()
+        photo_license = str(event["image_license"] or "").strip()
+        if photo_credit:
+            credits.append(photo_credit)
+        if photo_license:
+            licenses.append(photo_license)
+    if background_asset and background_asset["credit"] and background_asset["credit"] not in credits:
+        credits.append(background_asset["credit"])
+    if background_asset and background_asset["license"] and background_asset["license"] not in licenses:
+        licenses.append(background_asset["license"])
+    license_name = "; ".join(licenses) or None
+    credit = "; ".join(credits) or None
     generated_at = utc_now() if photo_origin == "ai" else None
     selection_model = "local-card-renderer" if photo_origin != "ai" else \
         f"local-card-renderer + {os.getenv('IMAGE_GEN_MODEL', 'AI')}"
