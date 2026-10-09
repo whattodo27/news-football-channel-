@@ -3,10 +3,15 @@ import logging, os, re, sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .config import generated_images_dir, source_images_dir
+
 LOGGER = logging.getLogger(__name__)
 TERMINAL = ("published", "failed", "skipped")
-TRANSIENT_IMAGE_DIRS = (Path("/data/source_images"), Path("/data/generated_images"))
 IMAGE_FILE = re.compile(r"event-(\d+)\.(?:jpe?g|png)$", re.IGNORECASE)
+
+
+def _transient_image_dirs() -> tuple[Path, Path]:
+    return source_images_dir(), generated_images_dir()
 
 def retention_days() -> int:
     value = int(os.getenv("NEWSBOT_RAW_RETENTION_DAYS", "30"))
@@ -22,7 +27,7 @@ def _managed_event_image(path_value: str, event_id: int) -> Path | None:
         return None
     try:
         resolved = path.resolve(strict=False)
-        roots = {root.resolve() for root in TRANSIENT_IMAGE_DIRS}
+        roots = {root.resolve() for root in _transient_image_dirs()}
     except OSError:
         return None
     if resolved.parent not in roots:
@@ -78,7 +83,7 @@ def cleanup_old_event_images(db: sqlite3.Connection) -> int:
         removed += 1
 
     referenced = {str(row[0]) for row in db.execute("SELECT image_path FROM events WHERE image_path IS NOT NULL")}
-    for root in TRANSIENT_IMAGE_DIRS:
+    for root in _transient_image_dirs():
         try:
             root.mkdir(parents=True, exist_ok=True)
             candidates = list(root.iterdir())
@@ -101,6 +106,20 @@ def cleanup_old_event_images(db: sqlite3.Connection) -> int:
     return removed
 
 
+def _purge_stale_headlines(db: sqlite3.Connection) -> int:
+    """Drop cached card headlines for terminal events older than the headline TTL (3 days)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat(timespec="seconds")
+    marks = ",".join("?" for _ in TERMINAL)
+    with db:
+        cursor = db.execute(
+            f"UPDATE events SET headline_text=NULL, headline_generated_at=NULL "
+            f"WHERE (headline_text IS NOT NULL OR headline_generated_at IS NOT NULL) "
+            f"AND state IN ({marks}) AND COALESCE(published_at,updated_at,created_at)<?",
+            (*TERMINAL, cutoff),
+        )
+    return int(cursor.rowcount or 0)
+
+
 def cleanup_old_content(db: sqlite3.Connection) -> int:
     """Drop copied RSS bodies from old terminal events; keep event and source audit metadata."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days())).isoformat(timespec="seconds")
@@ -118,6 +137,7 @@ def cleanup_old_content(db: sqlite3.Connection) -> int:
             db.execute(f"UPDATE article_sources SET raw_entry_json='{{}}' WHERE article_id IN ({placeholders})", ids)
             db.execute("CREATE TABLE IF NOT EXISTS maintenance_state (key TEXT PRIMARY KEY,value TEXT NOT NULL)")
     cleanup_old_event_images(db)
+    _purge_stale_headlines(db)
     if ids:
         _vacuum_if_due(db)
     LOGGER.info("retention cleanup cleared RSS bodies for %d old terminal article(s)",len(ids))

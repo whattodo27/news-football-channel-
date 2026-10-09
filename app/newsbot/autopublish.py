@@ -33,12 +33,12 @@ def _db_path(db: sqlite3.Connection) -> Path | None:
     return Path(row[2])
 
 
-def _publish_in_isolated_connection(db_path: str, event_id: int) -> None:
+async def _publish_in_isolated_connection(db_path: str, event_id: int) -> None:
     from .publisher import publish_event
 
     connection = connect(Path(db_path))
     try:
-        publish_event(connection, event_id)
+        await publish_event(connection, event_id)
     finally:
         connection.close()
 
@@ -47,8 +47,10 @@ async def run_autopublish_cycle(db: sqlite3.Connection) -> int:
     """Disabled by default; publishes only events explicitly approved by a human."""
     if not autopublish_enabled():
         return 0
-    from .editorial import ensure_story_publish_slot, load_rules, match_result_eligible
+    from .editorial import load_rules, match_result_eligible
+    from .publisher import recover_stale_publishing
 
+    recover_stale_publishing(db)
     rules = load_rules()
     story_limit = int(rules["interesting_news"]["daily_limit"])
     start, end = _today_window()
@@ -78,7 +80,7 @@ async def run_autopublish_cycle(db: sqlite3.Connection) -> int:
         if lane == "match_results" and not match_result_eligible(row["match_competition"], rules)[0]:
             continue
         try:
-            await asyncio.to_thread(_publish_in_isolated_connection, str(db_path), int(row["id"]))
+            await _publish_in_isolated_connection(str(db_path), int(row["id"]))
             if lane == "interesting_news": story_count += 1
             sent += 1
         except Exception as exc:

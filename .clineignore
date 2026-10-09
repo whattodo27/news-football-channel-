@@ -1,0 +1,57 @@
+# ─── Секреты (КРИТИЧНО: никогда не читать) ───────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ─── Данные (не читать, там бинарь и мусор) ──────
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+dump.rdb
+*.parquet
+*.csv
+*.xlsx
+
+# ─── Python (кэш и сборка — не нужны) ────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ─── IDE и OS (не влияет на логику) ──────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Логи (шум) ──────────────────────────────────
+*.log
+logs/
+
+# ─── Медиа (бинарь, модели не нужен) ─────────────
+assets/
+generated_images/
+asset_import/*
+!asset_import/README.md
+
+# ─── Git (не читать историю и объекты) ───────────
+.git/
+.gitignore

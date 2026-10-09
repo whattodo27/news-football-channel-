@@ -10,14 +10,15 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from .assets import choose_background, find_crest, find_flag
+from .config import source_images_dir
 from .workflow import utc_now
 
 LOGGER = logging.getLogger(__name__)
-OUTPUT_DIR = Path("/data/source_images")
 SIZE = (1080, 1350)
+# Deferred: mem_limit 256m — optimize _gradient_background pixel loop if OOM under load.
 FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -233,8 +234,9 @@ def generate_scorecard(db: sqlite3.Connection, event_id: int, force: bool = Fals
     draw.rounded_rectangle((225, 1070, 855, 1156), radius=43, fill=(104, 235, 164, 242))
     draw.text((540, 1113), status, font=status_font, anchor="mm", fill=(4, 31, 23, 255))
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUTPUT_DIR / f"event-{event_id}.jpg"
+    output_dir = source_images_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"event-{event_id}.jpg"
     canvas.convert("RGB").save(path, "JPEG", quality=92, optimize=True, progressive=True)
     if path.stat().st_size > 15 * 1024 * 1024:
         path.unlink(missing_ok=True)
@@ -262,6 +264,160 @@ def generate_scorecard(db: sqlite3.Connection, event_id: int, force: bool = Fals
         )
     LOGGER.info("generated match scorecard event=%d background_asset=%s bytes=%d",
                 event_id, background_asset["id"] if background_asset else "gradient", path.stat().st_size)
+    return str(path)
+
+
+def _soft_shadow(image: Image.Image, radius: int = 12, alpha: int = 90) -> Image.Image:
+    """Pad an RGBA image with a soft dark halo for contrast on busy backgrounds."""
+    pad = radius
+    size = (image.width + 2 * pad, image.height + 2 * pad)
+    silhouette = image.getchannel("A").filter(ImageFilter.GaussianBlur(radius))
+    shadow = Image.new("RGBA", size, (0, 0, 0, 0))
+    dark = Image.new("RGBA", size, (0, 0, 0, alpha))
+    dark.putalpha(silhouette)
+    shadow.alpha_composite(dark)
+    shadow.alpha_composite(image, (pad, pad))
+    return shadow
+
+
+def _headline_layout(draw: ImageDraw.ImageDraw, headline: str) -> list[tuple[str, ImageFont.FreeTypeFont]]:
+    """Layout a short teaser headline: one big line if it fits, else a two-line wrap."""
+    font = _fit_font(draw, headline, 840, 88, bold=True)
+    if font.size >= 48:
+        return [(headline, font)]
+    return _fit_name(draw, headline, 840, max_lines=2)
+
+
+def _resolve_event_visual(db: sqlite3.Connection, title: str) -> tuple[str | None, str | None]:
+    """Find one crest or flag whose alias appears in the title (word-boundary match).
+
+    Prefers a club crest over a national flag (more specific); within each, the
+    longest matching alias wins. Returns (file_path, kind) or (None, None). At most
+    one visual is ever returned -- never both.
+    """
+    text = title.casefold()
+    boundary = r"(?<![0-9a-zа-яё]){}(?![0-9a-zа-яё])"
+
+    def best_match(query: str) -> tuple[str | None, int]:
+        path, length = None, 0
+        for row in db.execute(query).fetchall():
+            alias = str(row["alias"] or "").strip().casefold()
+            if len(alias) < 4:
+                continue
+            if re.search(boundary.format(re.escape(alias)), text) and len(alias) > length:
+                path, length = str(row["file_path"]), len(alias)
+        return path, length
+
+    crest, _ = best_match(
+        "SELECT a.file_path AS file_path, x.alias AS alias "
+        "FROM media_assets a JOIN media_asset_aliases x ON x.asset_id = a.id "
+        "WHERE a.asset_type = 'crest' AND a.enabled = 1")
+    if crest:
+        return crest, "crest"
+    flag, _ = best_match(
+        "SELECT f.file_path AS file_path, x.alias AS alias "
+        "FROM country_flags f JOIN country_flag_aliases x ON x.country_code = f.country_code "
+        "WHERE f.enabled = 1")
+    if flag:
+        return flag, "flag"
+    return None, None
+
+
+def generate_news_card(db: sqlite3.Connection, event_id: int,
+                       photo_path: str | None = None, photo_origin: str | None = None) -> str:
+    """Render an interesting_news card: random background + headline (+ photo or crest/flag).
+
+    If ``photo_path`` is given it is composited ON TOP of the background as the main
+    image; otherwise a crest/flag resolved from the title is overlaid, and if neither
+    resolves only the background + headline are drawn. No score line, no brand.
+    """
+    event = db.execute("SELECT id,title FROM events WHERE id=?", (event_id,)).fetchone()
+    if not event:
+        raise ValueError(f"Event {event_id} does not exist")
+    from .headline import generate_headline
+    headline = generate_headline(db, event_id)
+    if not headline:
+        raise ValueError(f"Event {event_id} has no headline to render; falling back to text-only post")
+
+    canvas, background_asset = _background(db)
+    draw = ImageDraw.Draw(canvas, "RGBA")
+
+    # Photo (RSS/AI) composited as a rounded main image in the upper area, or a
+    # resolved crest/flag -- never a placeholder when neither is available.
+    if photo_path and Path(photo_path).is_file():
+        try:
+            with Image.open(photo_path) as source:
+                photo = ImageOps.fit(source.convert("RGB"), (960, 610),
+                                     method=Image.Resampling.LANCZOS).convert("RGBA")
+            photo = _rounded_alpha(photo, 24)
+            canvas.alpha_composite(photo, (60, 152))
+            draw.rounded_rectangle((60, 152, 1020, 762), radius=24,
+                                   outline=(255, 255, 255, 40), width=2)
+        except (OSError, ValueError) as exc:
+            LOGGER.warning("news-card photo overlay failed event=%d error=%s",
+                           event_id, type(exc).__name__)
+            photo_path = None
+
+    if not photo_path:
+        visual_path, kind = _resolve_event_visual(db, str(event["title"] or ""))
+        if visual_path:
+            try:
+                with Image.open(visual_path) as source:
+                    visual = _transparent_outer_matte(source)
+                if kind == "crest":
+                    visual.thumbnail((300, 300), Image.Resampling.LANCZOS)
+                else:
+                    visual.thumbnail((360, 220), Image.Resampling.LANCZOS)
+                    visual = _rounded_alpha(visual, 16)
+                visual = _soft_shadow(visual)
+                canvas.alpha_composite(visual, (540 - visual.width // 2, 470 - visual.height // 2))
+            except (OSError, ValueError) as exc:
+                LOGGER.warning("news-card crest/flag overlay failed event=%d error=%s",
+                               event_id, type(exc).__name__)
+
+    # Soft bottom scrim for headline legibility -- no hard-edged plate.
+    scrim = Image.new("RGBA", SIZE, (0, 0, 0, 0))
+    scrim_draw = ImageDraw.Draw(scrim)
+    for y in range(720, SIZE[1]):
+        alpha = int(135 * (y - 720) / (SIZE[1] - 720))
+        scrim_draw.line((0, y, SIZE[0], y), fill=(0, 7, 14, alpha))
+    canvas = Image.alpha_composite(canvas, scrim)
+    draw = ImageDraw.Draw(canvas, "RGBA")
+
+    lines = _headline_layout(draw, headline)
+    for index, (line, font) in enumerate(lines):
+        y = 1100 + (index - (len(lines) - 1) / 2) * 74
+        draw.text((540, y), line, font=font, anchor="mm",
+                  fill=(255, 255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0, 110))
+
+    output_dir = source_images_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"event-{event_id}.jpg"
+    canvas.convert("RGB").save(path, "JPEG", quality=92, optimize=True, progressive=True)
+    if path.stat().st_size > 15 * 1024 * 1024:
+        path.unlink(missing_ok=True)
+        raise ValueError("Generated news card exceeds 15 MB")
+
+    reason = {
+        "rss": "RSS/Commons фото на фоновой карточке",
+        "ai": "ИИ-фото на фоновой карточке",
+    }.get(photo_origin, "Текстовая карточка (фон + заголовок)")
+    license_name = background_asset["license"] if background_asset and background_asset["license"] else None
+    credit = background_asset["credit"] if background_asset and background_asset["credit"] else None
+    generated_at = utc_now() if photo_origin == "ai" else None
+    selection_model = "local-card-renderer" if photo_origin != "ai" else \
+        f"local-card-renderer + {os.getenv('IMAGE_GEN_MODEL', 'AI')}"
+    with db:
+        db.execute(
+            """UPDATE events SET image_path=?,image_origin='news_card',image_description=?,
+                      image_license=?,image_credit=?,image_selected_at=?,image_selection_reason=?,
+                      image_selection_model=?,image_generated_at=?,updated_at=? WHERE id=?""",
+            (str(path), headline, license_name, credit, utc_now(), reason, selection_model,
+             generated_at, utc_now(), event_id),
+        )
+    LOGGER.info("generated news card event=%d background=%s photo=%s bytes=%d",
+                event_id, background_asset["id"] if background_asset else "gradient",
+                "yes" if photo_path else "no", path.stat().st_size)
     return str(path)
 
 

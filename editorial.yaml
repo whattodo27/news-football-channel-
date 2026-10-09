@@ -6,6 +6,12 @@ interesting_news:
   # Одного доверенного издателя достаточно только для ручной редакционной очереди.
   min_independent_publishers: 1
 
+relevance:
+  # Минимальный relevance_score чтобы считать событие футбольным без ручной проверки.
+  football_min_score: 0.70
+  # При relevance=not_football и score не ниже этого порога — авто-skip.
+  not_football_auto_skip: 0.92
+
 match_results:
   # Для результата матча остаются нужны два независимых подтверждения.
   min_independent_publishers: 2

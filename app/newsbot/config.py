@@ -36,9 +36,37 @@ def load_sources(path: Path) -> list[dict[str, Any]]:
         result.append(source)
     return result
 
+
+def data_dir() -> Path:
+    """Single root for managed image dirs and the default SQLite path.
+
+    Prefer NEWSBOT_DATA_DIR; otherwise derive from NEWSBOT_DB's parent, else /data.
+    """
+    configured = os.getenv("NEWSBOT_DATA_DIR")
+    if configured:
+        return Path(configured)
+    db = os.getenv("NEWSBOT_DB")
+    if db:
+        return Path(db).expanduser().resolve().parent
+    return Path("/data")
+
+
+def asset_root() -> Path:
+    return data_dir() / "assets"
+
+
+def source_images_dir() -> Path:
+    return data_dir() / "source_images"
+
+
+def generated_images_dir() -> Path:
+    # Kept for retention cleanup of any leftover Bria-era files; imagegen.py is removed.
+    return data_dir() / "generated_images"
+
+
 def runtime_paths() -> tuple[Path, Path, int]:
     sources_path = Path(os.getenv("NEWSBOT_SOURCES", "/app/sources.yaml"))
-    db_path = Path(os.getenv("NEWSBOT_DB", "/data/newsbot.sqlite3"))
+    db_path = Path(os.getenv("NEWSBOT_DB", str(data_dir() / "newsbot.sqlite3")))
     poll_seconds = int(os.getenv("NEWSBOT_POLL_SECONDS", "3600"))
     if poll_seconds < 30:
         raise ValueError("NEWSBOT_POLL_SECONDS must be at least 30")

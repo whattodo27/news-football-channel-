@@ -8,14 +8,17 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from .config import runtime_paths
+from .config import asset_root, runtime_paths
 from .db import connect
 from .workflow import utc_now
 
 LOGGER = logging.getLogger(__name__)
-ASSET_ROOT = Path("/data/assets")
 MAX_ASSET_BYTES = 15 * 1024 * 1024
 EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png"}
+
+
+def _asset_root() -> Path:
+    return asset_root()
 
 
 def _safe_key(value: str | None) -> str | None:
@@ -139,7 +142,7 @@ def _import_country_flags(db: sqlite3.Connection, root: Path) -> tuple[int, int]
         mime, extension = _detect_image(source)
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         existing = db.execute("SELECT country_code FROM country_flags WHERE country_code=?", (code,)).fetchone()
-        target_dir = ASSET_ROOT / "flags"
+        target_dir = _asset_root() / "flags"
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / f"{code.lower()}{extension}"
         if not existing:
@@ -283,7 +286,7 @@ def add_asset(
     if duplicate:
         raise ValueError(f"This image is already in the library as asset {duplicate['id']}")
 
-    target_dir = ASSET_ROOT / ("backgrounds" if asset_type == "background" else "crests")
+    target_dir = _asset_root() / ("backgrounds" if asset_type == "background" else "crests")
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{key or 'background'}-{digest[:16]}{extension}"
     if target.exists():
@@ -392,7 +395,7 @@ def remove_asset(db: sqlite3.Connection, asset_id: int) -> None:
     if not row:
         raise ValueError(f"Asset {asset_id} does not exist")
     path = Path(row["file_path"]).resolve()
-    root = ASSET_ROOT.resolve()
+    root = _asset_root().resolve()
     if root not in path.parents:
         raise ValueError("Refusing to delete a file outside the managed asset library")
     path.unlink(missing_ok=True)

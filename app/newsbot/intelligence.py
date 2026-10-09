@@ -4,10 +4,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 import httpx
 from .workflow import refresh_confirmations, utc_now
-from .editorial import load_rules, match_result_eligible, min_independent_publishers
+from .editorial import load_rules, match_result_eligible, min_independent_publishers, relevance_thresholds
 
 LOGGER = logging.getLogger(__name__)
 API_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Deferred: MAX_CONTEXT=5 but _analyze_batch only sends context[:2]; align when tuning AI batches.
 MAX_PENDING, MAX_CONTEXT = 15, 5
 REQUEST_BATCH_SIZE = 5
 
@@ -16,7 +17,7 @@ SYSTEM_PROMPT = """Ты редактор русскоязычного футбо
 Только ассоциационный футбол: регби и американский футбол не подходят. Приоритет российским командам, затем важным мировым событиям и крупным турнирам.
 Объединяй записи только если они сообщают об одном конкретном событии, не просто об одной теме.
 Не выдумывай факты, счёт, дату, цитату или трансфер. Пиши по-русски, коротко, фактологично, обычно 2–5 предложений.
-Черновик должен легко читаться в Telegram: первая строка — короткий ясный заголовок/зацепка с главным фактом; далее 1–2 коротких абзаца с контекстом и тем, почему событие важно читателю. Не делай рекламных призывов и кликбейта. Не добавляй ссылки и список источников в текст публикации. Если новость — слух, явно обозначь это и назови издание в тексте. Если фактов недостаточно, верни пустой draft_ru.
+Черновик — живой Telegram-пост в тоне эмоционального футбольного комментатора, а не сухая сводка: пиши так, как эксперт высказался бы в прямом эфире, но строго по фактам из RSS. Верни в draft_ru готовый текст с Telegram-разметкой HTML: первый абзац — короткая ударная зацепка с главным фактом (имя героя и ключевой факт выделяй тегом <b>…</b>, цитаты — <i>…</i>); добавь 1–3 уместных эмодзи (например ⚽🔥🏆⚡😱); абзацы разделяй пустой строкой. Используй только теги <b> и <i>, без ссылок и списков. Не делай рекламных призывов и кликбейта. Если новость — слух, явно обозначь это и назови издание. Если фактов недостаточно, верни пустой draft_ru.
 Отдельно оцени общественную важность (importance_score) и интересность для читателя (interest_score) по шкале 0–10. Интересность — отдельная редакционная оценка для новостей, не оценка надёжности источника. Не ставь 10 просто за громкое имя; учитывай масштаб, последствия, новизну и отношение к российскому футболу. Для результата завершённого матча интересность не используется.
 Также верни importance как routine|important|major_match; major_match — значимый матч/финал/дерби, а не просто известная команда.
 Если кластер — итог уже завершившегося матча, добавь content_type="match_result" и match_result с точными полями home_team, away_team, home_score, away_score, competition и status. Счёт бери только из переданных RSS-данных; если порядок команд или счёт неясен, не заполняй match_result. Для остальных футбольных событий используй content_type="event".
@@ -119,13 +120,20 @@ async def _request(events: list[dict[str, Any]], key: str, model: str) -> dict[s
 
 
 def _merge_events(db: sqlite3.Connection, ids: list[int]) -> int:
+    """Merge cluster events into the lowest id without UNIQUE(article_id) collisions."""
     ids = sorted(set(ids))
     canonical = ids[0]
     if len(ids) == 1:
         return canonical
     with db:
         for old in ids[1:]:
-            db.execute("UPDATE event_articles SET event_id=? WHERE event_id=?", (canonical, old))
+            # INSERT OR IGNORE skips articles already linked to canonical; then drop the donor.
+            db.execute(
+                """INSERT OR IGNORE INTO event_articles(event_id, article_id)
+                   SELECT ?, article_id FROM event_articles WHERE event_id=?""",
+                (canonical, old),
+            )
+            db.execute("DELETE FROM event_articles WHERE event_id=?", (old,))
             db.execute("DELETE FROM events WHERE id=?", (old,))
     refresh_confirmations(db, canonical)
     return canonical
@@ -207,6 +215,7 @@ def _apply_result(db: sqlite3.Connection, pending_ids: list[int], events: list[d
     clusters = _validate_clusters(raw, pending_ids, input_ids)
     pending = set(pending_ids)
     rules = load_rules()
+    football_min, not_football_skip = relevance_thresholds(rules)
     analyzed = merged = 0
     for cluster in clusters:
         ids = cluster["event_ids"]
@@ -223,9 +232,9 @@ def _apply_result(db: sqlite3.Connection, pending_ids: list[int], events: list[d
         match_fields = _clean_match_result(cluster)
         is_match = match_fields["match_content_type"] == "match_result"
         lane = "match_results" if is_match else "interesting_news"
-        if relevance == "not_football" and score >= 0.92:
+        if relevance == "not_football" and score >= not_football_skip:
             state, state_reason = "skipped", reason or "ИИ определил новость как не относящуюся к ассоциационному футболу"
-        elif relevance != "football" or score < 0.70:
+        elif relevance != "football" or score < football_min:
             state, state_reason = "awaiting_verification", reason or "Нужна ручная проверка футбольной релевантности"
         elif is_match:
             complete_result = bool(
@@ -252,7 +261,7 @@ def _apply_result(db: sqlite3.Connection, pending_ids: list[int], events: list[d
         else:
             required = min_independent_publishers(lane, rules)
             state, state_reason = "awaiting_verification", f"Недостаточно независимых подтверждений (нужно: {required})"
-        if relevance != "football" or score < 0.70:
+        if relevance != "football" or score < football_min:
             draft = ""
         priority = "major_match" if importance == "major_match" else "routine"
         with db:
@@ -272,6 +281,7 @@ def _apply_result(db: sqlite3.Connection, pending_ids: list[int], events: list[d
 
 def _schedule_retry(db: sqlite3.Connection, event_ids: list[int], error: str,
                     config_error: bool = False) -> None:
+    # Deferred: drop legacy OpenRouter branch in _recent_ids ai_reason LIKE once logs confirm unused.
     if not event_ids:
         return
     marks = ",".join("?" for _ in event_ids)

@@ -22,9 +22,15 @@ async def main() -> None:
     logger.info("starting news service feeds=%d database=%s interval=%ds",len(enabled),db_path,poll_seconds)
     connection = connect(db_path)
     sync_sources(connection,sources,datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    from .publisher import recover_stale_publishing
+    recovered = recover_stale_publishing(connection)
+    if recovered:
+        logger.info("recovered %d stale publishing event(s) on startup", recovered)
     indexed = index_untracked_articles(connection)
     if indexed: logger.info("indexed %d existing articles into the review queue",indexed)
     cleanup_old_content(connection)
+    # Deferred: mem_limit 256m / _gradient_background Pillow cost; get_source unrated (fanat1k);
+    # collect_cycle semaphore 2–4 for parallel RSS.
     review_task = None
     if not args.once and os.getenv("BOT_TOKEN"):
         from .telegram_review import run_review_bot

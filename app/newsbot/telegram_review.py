@@ -187,7 +187,7 @@ def _apply_decision(db_path: str, event_id: int, decision: str) -> str:
         elif row["state"] != "approved":
             raise ValueError(f"Событие уже обработано (состояние: {row['state']})")
         from .publisher import publish_event
-        publish_event(db, event_id)
+        asyncio.run(publish_event(db, event_id))
         return f"Событие #{event_id} опубликовано в канале."
     finally:
         db.close()

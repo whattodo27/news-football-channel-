@@ -76,7 +76,7 @@ sources:
     tournaments: [uefa_competitions]
     trust_tier: official
     source_priority: 9
-    enabled: false
+    enabled: true
 
   - id: fifa
     name: FIFA RSS
@@ -89,7 +89,7 @@ sources:
     tournaments: [fifa_competitions]
     trust_tier: official
     source_priority: 9
-    enabled: false
+    enabled: true
 
   - id: bundesliga_news
     name: Bundesliga English News RSS
@@ -154,7 +154,7 @@ sources:
     tournaments: [all_football]
     trust_tier: specialist
     source_priority: 6
-    enabled: false
+    enabled: true
 
   - id: euro_football_main
     name: Euro-Football General Feed
@@ -193,7 +193,7 @@ sources:
     tournaments: [rpl]
     trust_tier: specialist
     source_priority: 8
-    enabled: false
+    enabled: true
 
   - id: euro_football_category_30985
     name: Euro-Football Category 30985
@@ -219,7 +219,7 @@ sources:
     tournaments: [russia_national_team]
     trust_tier: specialist
     source_priority: 8
-    enabled: false
+    enabled: true
 
   - id: yandex_football
     name: Yandex News Football
@@ -245,4 +245,4 @@ sources:
     tournaments: []
     trust_tier: unrated
     source_priority: 4
-    enabled: false
+    enabled: true

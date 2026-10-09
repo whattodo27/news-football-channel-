@@ -3,9 +3,17 @@ import argparse, asyncio, hashlib, json, re, sqlite3
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
+from typing import Any
 
 TIERS = ("official", "established", "specialist")
-from .editorial import ensure_story_approval_slot, load_rules, match_result_eligible, min_independent_publishers
+from .editorial import (
+    ensure_story_approval_slot,
+    immediate_transaction,
+    load_rules,
+    match_result_eligible,
+    min_independent_publishers,
+    relevance_thresholds,
+)
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -21,33 +29,39 @@ def event_day(value: str | None, fallback: str) -> str:
         return parsed.astimezone(timezone.utc).date().isoformat()
     return fallback[:10]
 
-def event_key(title: str, day: str) -> str:
+def event_key(title: str, day: str, tie_breaker: str = "") -> str:
+    """Hash day + normalized title + URL/publisher so same-day title collisions stay distinct."""
     text = re.sub(r"<[^>]*>", " ", unescape(title)).casefold()
     text = " ".join("".join(ch if ch.isalnum() else " " for ch in text).split())
-    return hashlib.sha256(f"{day}|{text}".encode()).hexdigest()
+    breaker = " ".join((tie_breaker or "").casefold().split())
+    return hashlib.sha256(f"{day}|{text}|{breaker}".encode()).hexdigest()
 
-def editorial_review_ready(row: sqlite3.Row) -> bool:
-    if row["ai_state"] != "complete" or row["relevance"] != "football" or float(row["relevance_score"] or 0) < 0.70:
+def editorial_review_ready(row: sqlite3.Row, rules: dict[str, Any] | None = None) -> bool:
+    rules = rules or load_rules()
+    football_min, _ = relevance_thresholds(rules)
+    if row["ai_state"] != "complete" or row["relevance"] != "football" or float(row["relevance_score"] or 0) < football_min:
         return False
     if row["publication_lane"] == "match_results":
         if row["match_content_type"] != "match_result" or row["match_status"] not in {"final", "extra_time"}:
             return False
         if not row["match_home_team"] or not row["match_away_team"] or not row["match_competition"] or row["match_home_score"] is None or row["match_away_score"] is None:
             return False
-        return match_result_eligible(row["match_competition"], load_rules())[0]
-    return int(row["interest_score"] or 0) >= int(load_rules()["interesting_news"]["min_interest_score"])
+        return match_result_eligible(row["match_competition"], rules)[0]
+    return int(row["interest_score"] or 0) >= int(rules["interesting_news"]["min_interest_score"])
 
-def editorial_failure_reason(row: sqlite3.Row) -> str:
+def editorial_failure_reason(row: sqlite3.Row, rules: dict[str, Any] | None = None) -> str:
+    rules = rules or load_rules()
+    football_min, _ = relevance_thresholds(rules)
     if row["ai_state"] != "complete":
         return "Ожидает AI-оценки футбольной релевантности и редакционного типа"
-    if row["relevance"] != "football" or float(row["relevance_score"] or 0) < 0.70:
+    if row["relevance"] != "football" or float(row["relevance_score"] or 0) < football_min:
         return "Нужна ручная проверка футбольной релевантности"
     if row["publication_lane"] == "match_results":
-        eligible, reason = match_result_eligible(row["match_competition"], load_rules())
+        eligible, reason = match_result_eligible(row["match_competition"], rules)
         if not eligible:
             return reason or "Матч не подходит под активный режим турнира"
         return "Не подтверждены команды, турнир, счёт или статус завершённого матча"
-    minimum = int(load_rules()["interesting_news"]["min_interest_score"])
+    minimum = int(rules["interesting_news"]["min_interest_score"])
     return f"Интересность ниже порога редакционной очереди {minimum}/10"
 
 def refresh_confirmations(db: sqlite3.Connection, eid: int, stamp: str | None = None) -> int:
@@ -59,9 +73,10 @@ def refresh_confirmations(db: sqlite3.Connection, eid: int, stamp: str | None = 
         "SELECT state,ai_state,relevance,relevance_score,interest_score,publication_lane,match_content_type,match_home_team,match_away_team,match_home_score,match_away_score,match_competition,match_status FROM events WHERE id=?",
         (eid,),
     ).fetchone()
+    rules = load_rules()
     if row and row["state"] in {"awaiting_verification", "awaiting_review"}:
-        ai_ready = editorial_review_ready(row)
-        required = min_independent_publishers(row["publication_lane"], load_rules())
+        ai_ready = editorial_review_ready(row, rules)
+        required = min_independent_publishers(row["publication_lane"], rules)
         ready_for_review = count >= required and ai_ready
         state = "awaiting_review" if ready_for_review else "awaiting_verification"
         if ready_for_review:
@@ -69,7 +84,7 @@ def refresh_confirmations(db: sqlite3.Connection, eid: int, stamp: str | None = 
         elif count < required:
             reason = f"Недостаточно независимых подтверждений (нужно: {required})"
         else:
-            reason = editorial_failure_reason(row)
+            reason = editorial_failure_reason(row, rules)
         with db:
             db.execute(
                 "UPDATE events SET confirmation_count=?,state=?,state_reason=?,updated_at=? WHERE id=?",
@@ -82,10 +97,20 @@ def refresh_confirmations(db: sqlite3.Connection, eid: int, stamp: str | None = 
     return count
 
 def index_article(db: sqlite3.Connection, article_id: int) -> int:
-    article = db.execute("SELECT title,published_at,first_seen_at FROM articles WHERE id=?", (article_id,)).fetchone()
+    article = db.execute(
+        "SELECT title,published_at,first_seen_at,link FROM articles WHERE id=?", (article_id,)
+    ).fetchone()
     if not article: raise ValueError(f"Article {article_id} does not exist")
     day = event_day(article["published_at"], article["first_seen_at"])
-    key, now = event_key(article["title"], day), utc_now()
+    publisher_row = db.execute(
+        """SELECT s.publisher FROM article_sources a JOIN sources s ON s.id=a.source_id
+           WHERE a.article_id=? ORDER BY s.source_priority DESC,s.id LIMIT 1""",
+        (article_id,),
+    ).fetchone()
+    tie_breaker = (article["link"] or "").strip() or (
+        f"publisher:{(publisher_row['publisher'] if publisher_row else '')}|article:{article_id}"
+    )
+    key, now = event_key(article["title"], day, tie_breaker), utc_now()
     with db:
         db.execute("INSERT OR IGNORE INTO events(event_key,title,event_date,created_at,updated_at) VALUES(?,?,?,?,?)",
                    (key, article["title"], day, now, now))
@@ -102,14 +127,14 @@ def repair_review_queue(db: sqlite3.Connection) -> int:
     with db:
         for row in rows:
             required = min_independent_publishers(row["publication_lane"], rules)
-            ready = int(row["confirmation_count"] or 0) >= required and editorial_review_ready(row)
+            ready = int(row["confirmation_count"] or 0) >= required and editorial_review_ready(row, rules)
             target_state = "awaiting_review" if ready else "awaiting_verification"
             if ready:
                 reason = None
             elif int(row["confirmation_count"] or 0) < required:
                 reason = f"Недостаточно независимых подтверждений (нужно: {required})"
             else:
-                reason = editorial_failure_reason(row)
+                reason = editorial_failure_reason(row, rules)
             if row["state"] == target_state and row["state_reason"] == reason:
                 continue
             db.execute("UPDATE events SET state=?,state_reason=?,updated_at=? WHERE id=?",
@@ -125,6 +150,7 @@ def index_untracked_articles(db: sqlite3.Connection) -> int:
 
 def list_events(db: sqlite3.Connection, state: str | None = None,
                 lane: str | None = None) -> list[sqlite3.Row]:
+    # Deferred: independence_group vs publisher semantics for confirmations are not unified here yet.
     query = """SELECT e.*,COUNT(ea.article_id) AS article_count,GROUP_CONCAT(DISTINCT s.publisher) AS publishers
         FROM events e LEFT JOIN event_articles ea ON ea.event_id=e.id
         LEFT JOIN article_sources a ON a.article_id=ea.article_id LEFT JOIN sources s ON s.id=a.source_id"""
@@ -143,27 +169,33 @@ def list_events(db: sqlite3.Connection, state: str | None = None,
 def approve_event(db: sqlite3.Connection, eid: int, priority: str | None = None, official_statement: bool = False) -> None:
     if priority is not None and priority not in {"routine", "major_match"}:
         raise ValueError("Priority must be routine or major_match")
+    rules = load_rules()
     row = db.execute("SELECT * FROM events WHERE id=?", (eid,)).fetchone()
     if not row: raise ValueError(f"Event {eid} does not exist")
     if row["state"] not in {"awaiting_review", "awaiting_verification"}:
         raise ValueError(f"Event is in state {row['state']}; only unreviewed events can be approved")
-    if not editorial_review_ready(row):
+    if not editorial_review_ready(row, rules):
         if row["publication_lane"] == "match_results":
             raise ValueError("Match result is not fully verified or is outside the active tournament mode")
-        minimum = int(load_rules()["interesting_news"]["min_interest_score"])
+        minimum = int(rules["interesting_news"]["min_interest_score"])
         raise ValueError(f"News interest is below the {minimum}/10 publication threshold")
-    priority = priority or row["news_priority"]
+    chosen_priority = priority or row["news_priority"]
     official = db.execute("""SELECT 1 FROM event_articles ea JOIN article_sources a ON a.article_id=ea.article_id
         JOIN sources s ON s.id=a.source_id WHERE ea.event_id=? AND s.source_type='official' LIMIT 1""", (eid,)).fetchone()
-    required = min_independent_publishers(row["publication_lane"], load_rules())
+    required = min_independent_publishers(row["publication_lane"], rules)
     if int(row["confirmation_count"]) < required and not (official_statement and official):
         raise ValueError(f"Need {required} independent publisher(s), or verify the organization's official statement")
-    if row["publication_lane"] == "interesting_news":
-        ensure_story_approval_slot(db)
-    with db:
+    # Count check + state transition under one IMMEDIATE lock (no concurrent overshoot).
+    with immediate_transaction(db):
+        locked = db.execute("SELECT state,publication_lane FROM events WHERE id=?", (eid,)).fetchone()
+        if not locked or locked["state"] not in {"awaiting_review", "awaiting_verification"}:
+            raise ValueError(f"Event is in state {locked['state'] if locked else 'missing'}; only unreviewed events can be approved")
+        if locked["publication_lane"] == "interesting_news":
+            ensure_story_approval_slot(db, rules)
+        now = utc_now()
         db.execute("""UPDATE events SET state='approved',state_reason=NULL,news_priority=?,
-            official_statement_verified=?,approved_at=?,updated_at=? WHERE id=?""",
-            (priority, int(official_statement), utc_now(), utc_now(), eid))
+            official_statement_verified=?,approved_at=?,updated_at=? WHERE id=? AND state IN ('awaiting_review','awaiting_verification')""",
+            (chosen_priority, int(official_statement), now, now, eid))
 
 def skip_event(db: sqlite3.Connection, eid: int, reason: str) -> None:
     reason = reason.strip()
@@ -224,7 +256,7 @@ def main() -> None:
                     print(f"Vision-проверка не выполнена: {exc}")
         elif args.publish is not None:
             from .publisher import publish_event
-            publish_event(db, args.publish)
+            asyncio.run(publish_event(db, args.publish))
         elif args.approve is not None:
             approve_event(db, args.approve, args.priority, args.official_statement)
             print(f"Approved event {args.approve} ({args.priority})")

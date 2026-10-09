@@ -7,6 +7,7 @@ services:
     environment:
       NEWSBOT_SOURCES: /app/sources.yaml
       NEWSBOT_EDITORIAL_CONFIG: /app/editorial.yaml
+      NEWSBOT_DATA_DIR: /data
       NEWSBOT_DB: /data/newsbot.sqlite3
       NEWSBOT_POLL_SECONDS: ${NEWSBOT_POLL_SECONDS:-3600}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
@@ -15,10 +16,12 @@ services:
       TELEGRAM_REVIEW_CHAT_ID: ${TELEGRAM_REVIEW_CHAT_ID:-}
       FILTER_MODEL: ${FILTER_MODEL:-openai/gpt-oss-120b}
       VISION_MODEL: ${VISION_MODEL:-qwen/qwen3.8-27b}
-      BRIA_API_KEY: ${BRIA_API_KEY:-}
       NEWSBOT_RAW_RETENTION_DAYS: ${NEWSBOT_RAW_RETENTION_DAYS:-30}
       NEWSBOT_IMAGE_RETENTION_DAYS: ${NEWSBOT_IMAGE_RETENTION_DAYS:-30}
       NEWSBOT_AUTOPUBLISH_ENABLED: "false"
+      IMAGE_GEN_API_KEY: ${IMAGE_GEN_API_KEY:-}
+      IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-}
+      IMAGE_GEN_BASE_URL: ${IMAGE_GEN_BASE_URL:-}
     volumes:
       - newsbot_data:/data
       - ./asset_import:/imports:ro

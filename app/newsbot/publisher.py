@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, html, logging, mimetypes, os, re, sqlite3
+import html, logging, mimetypes, os, re, sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import httpx
@@ -8,6 +8,19 @@ from .workflow import utc_now
 LOGGER = logging.getLogger(__name__)
 API = "https://api.telegram.org/bot{token}/"
 MAX_TEXT = 4096
+# Abandoned publishing rows older than this are demoted so the queue is not stuck forever.
+PUBLISHING_STALE_SECONDS = int(os.getenv("NEWSBOT_PUBLISHING_STALE_SECONDS", "900"))
+# Telegram HTML tags the editor model may emit in a draft; everything else stays escaped.
+_ALLOWED_FORMATTING_TAGS = ("b", "i", "u", "s")
+
+
+def _allow_formatting(escaped: str) -> str:
+    """Re-enable a whitelist of Telegram HTML tags after escaping untrusted draft text."""
+    for tag in _ALLOWED_FORMATTING_TAGS:
+        escaped = escaped.replace(f"&lt;{tag}&gt;", f"<{tag}>")
+        escaped = escaped.replace(f"&lt;/{tag}&gt;", f"</{tag}>")
+    return escaped
+
 
 def _post_content(db: sqlite3.Connection, event_id: int, *, require_approved: bool = True, max_text: int = MAX_TEXT) -> str:
     row = db.execute("""SELECT state,draft_text,ai_state,next_attempt_at,publication_lane,interest_score,
@@ -42,7 +55,7 @@ def _post_content(db: sqlite3.Connection, event_id: int, *, require_approved: bo
             else:
                 high = middle - 1
         escaped = html.escape(raw_draft[:low].rstrip()) + "…"
-    return escaped
+    return _allow_formatting(escaped)
 
 async def _send(text: str, token: str, chat_id: str, image_path: str | None = None) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=10.0)) as client:
@@ -64,7 +77,92 @@ async def _send(text: str, token: str, chat_id: str, image_path: str | None = No
     if not result.get("ok") or not isinstance(result.get("result"), dict): raise ValueError("Telegram did not confirm the message")
     return result["result"]
 
-def publish_event(db: sqlite3.Connection, event_id: int) -> None:
+
+def recover_stale_publishing(
+    db: sqlite3.Connection,
+    *,
+    stale_seconds: int | None = None,
+) -> int:
+    """Demote abandoned `publishing` events so they are not orphaned forever.
+
+    Ambiguous delivery (lost Telegram response) goes to retry_wait with a delay;
+    other stuck rows return to approved for a clean retry.
+    """
+    seconds = PUBLISHING_STALE_SECONDS if stale_seconds is None else stale_seconds
+    if seconds < 60:
+        raise ValueError("publishing stale timeout must be at least 60 seconds")
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat(timespec="seconds")
+    now = utc_now()
+    retry_at = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(timespec="seconds")
+    with db:
+        uncertain = db.execute(
+            """UPDATE events SET state='retry_wait',
+                   state_reason=COALESCE(state_reason, 'Восстановлено после зависшей публикации (неясный ответ Telegram)'),
+                   next_attempt_at=?, updated_at=?
+               WHERE state='publishing' AND updated_at<?
+                 AND state_reason LIKE '%потерян%'""",
+            (retry_at, now, cutoff),
+        ).rowcount
+        clear = db.execute(
+            """UPDATE events SET state='approved',
+                   state_reason='Восстановлено после зависшей публикации',
+                   next_attempt_at=NULL, updated_at=?
+               WHERE state='publishing' AND updated_at<?""",
+            (now, cutoff),
+        ).rowcount
+    recovered = int(uncertain or 0) + int(clear or 0)
+    if recovered:
+        LOGGER.warning(
+            "recovered stale publishing events count=%d uncertain=%d approved=%d stale_seconds=%d",
+            recovered, uncertain, clear, seconds,
+        )
+    return recovered
+
+
+def _resolve_news_image(db: sqlite3.Connection, event_id: int,
+                        image_row: sqlite3.Row | None) -> str | None:
+    """Resolve an interesting_news image via the fallback chain; return a path or None.
+
+    Order: reuse an already-built card -> RSS/Commons photo composited on a card ->
+    AI-generated photo composited -> text-only card -> None (text-only post).
+    """
+    if (image_row and image_row["image_origin"] == "news_card"
+            and image_row["image_path"] and os.path.isfile(image_row["image_path"])):
+        return image_row["image_path"]
+    # 1. RSS / Commons photo, composited onto a background card.
+    try:
+        from .image_selection import select_event_image
+        from .scorecard import generate_news_card
+        photo = select_event_image(db, event_id)
+        LOGGER.info("news image resolved via RSS/Commons photo event=%d", event_id)
+        return generate_news_card(db, event_id, photo_path=photo, photo_origin="rss")
+    except ValueError as exc:
+        LOGGER.warning("RSS/Commons photo unavailable for event=%d (%s); trying AI generation",
+                       event_id, exc)
+    # 2. AI-generated photo, composited onto a background card.
+    try:
+        from .imagegen_ai import generate_ai_photo
+        from .scorecard import generate_news_card
+        photo = generate_ai_photo(db, event_id)
+        LOGGER.info("news image resolved via AI photo event=%d", event_id)
+        return generate_news_card(db, event_id, photo_path=photo, photo_origin="ai")
+    except ValueError as exc:
+        LOGGER.warning("AI photo generation unavailable for event=%d (%s); trying text-only card",
+                       event_id, exc)
+    # 3. Text-only card: background + headline (+ crest/flag if resolvable).
+    try:
+        from .scorecard import generate_news_card
+        LOGGER.info("news image resolved via text-only card event=%d", event_id)
+        return generate_news_card(db, event_id)
+    except ValueError as exc:
+        LOGGER.warning("text-only card failed for event=%d (%s); publishing WITHOUT an image",
+                       event_id, exc)
+    return None
+
+
+async def publish_event(db: sqlite3.Connection, event_id: int) -> None:
+    """Publish an approved event to Telegram (async; safe under a running event loop)."""
+    recover_stale_publishing(db)
     token, chat_id = os.getenv("BOT_TOKEN"), os.getenv("TELEGRAM_CHANNEL_ID")
     if not token: raise ValueError("BOT_TOKEN is not configured")
     if not chat_id: raise ValueError("TELEGRAM_CHANNEL_ID is not configured")
@@ -81,16 +179,13 @@ def publish_event(db: sqlite3.Connection, event_id: int) -> None:
         from .scorecard import generate_scorecard
         image_path = generate_scorecard(db, event_id)
     else:
-        valid_source_photo = bool(image_row and image_row["image_origin"] and not image_row["image_generated_at"])
-        if not valid_source_photo or not image_path or not os.path.isfile(image_path):
-            from .image_selection import select_event_image
-            image_path = select_event_image(db, event_id, force=not valid_source_photo)
-    text = _post_content(db, event_id, max_text=1024)
+        image_path = _resolve_news_image(db, event_id, image_row)
+    text = _post_content(db, event_id, max_text=1024 if image_path else MAX_TEXT)
     prior = db.execute("SELECT attempt_count FROM events WHERE id=?", (event_id,)).fetchone()
     with db:
         db.execute("UPDATE events SET state='publishing',state_reason=NULL,attempt_count=attempt_count+1,updated_at=? WHERE id=?", (utc_now(), event_id))
     try:
-        result = asyncio.run(_send(text, token, chat_id, image_path))
+        result = await _send(text, token, chat_id, image_path)
     except httpx.HTTPStatusError as exc:
         attempts = int(prior["attempt_count"] or 0) + 1
         state, next_at = "failed", None
