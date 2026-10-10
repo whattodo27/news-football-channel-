@@ -50,9 +50,13 @@ def _validate_rules(document: dict[str, Any]) -> dict[str, Any]:
         "relevance": {**DEFAULTS["relevance"], **(document.get("relevance") or {})},
     }
     limit = int(rules["interesting_news"]["daily_limit"])
+    env_limit = os.getenv("NEWSBOT_AUTOPUBLISH_DAILY_LIMIT", "").strip()
+    if env_limit:
+        limit = int(env_limit)
+        rules["interesting_news"]["daily_limit"] = limit
     score = int(rules["interesting_news"]["min_interest_score"])
-    if limit not in {1, 2}:
-        raise ValueError("interesting_news.daily_limit must be 1 or 2")
+    if not 1 <= limit <= 20:
+        raise ValueError("interesting_news.daily_limit must be between 1 and 20")
     if not 0 <= score <= 10:
         raise ValueError("interesting_news.min_interest_score must be between 0 and 10")
     for lane in ("interesting_news", "match_results"):
