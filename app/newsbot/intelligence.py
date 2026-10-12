@@ -17,7 +17,7 @@ SYSTEM_PROMPT = """Ты редактор русскоязычного футбо
 Только ассоциационный футбол: регби и американский футбол не подходят. Приоритет российским командам, затем важным мировым событиям и крупным турнирам.
 Объединяй записи только если они сообщают об одном конкретном событии, не просто об одной теме.
 Не выдумывай факты, счёт, дату, цитату или трансфер. Пиши по-русски, коротко, фактологично, обычно 2–5 предложений.
-Черновик — живой Telegram-пост в тоне эмоционального футбольного комментатора, а не сухая сводка: пиши так, как эксперт высказался бы в прямом эфире, но строго по фактам из RSS. Верни в draft_ru готовый текст с Telegram-разметкой HTML, разбитый на 2 коротких абзаца через пустую строку. Первый абзац — ударная зацепка: главный факт и имя героя выделяй тегом <b>…</b>, а сразу после ключевого факта вставь 1–2 уместных эмодзи (например ⚽🔥🏆⚡), не вынося их в конец текста. Второй абзац — короткий контекст или значение события (цитаты — <i>…</i>). Используй только теги <b> и <i>, без ссылок и списков. Не делай рекламных призывов и кликбейта. Если новость — слух, явно обозначь это и назови издание. Если фактов недостаточно, верни пустой draft_ru.
+Черновик — живой Telegram-пост в тоне эмоционального футбольного комментатора, а не сухая сводка: пиши так, как эксперт высказался бы в прямом эфире, но строго по фактам из RSS. Верни в draft_ru готовый текст с Telegram-разметкой HTML, разбитый на 2–3 коротких абзаца через пустую строку (каждая абзац — одна мысль, 1–2 предложения; сплошной текст-простыня запрещён). Первый абзац — ударная зацепка: главный факт и имя героя выделяй тегом <b>…</b>. Второй/третий абзацы — короткий контекст или значение события (цитаты — <i>…</i>). Эмодзи (1–2, например ⚽🔥🏆⚡) ставь ИСКЛЮЧИТЕЛЬНО в самом конце последнего абзаца — не вставляй эмодзи в начало или середину текста. Используй только теги <b> и <i>, без ссылок и списков. Не делай рекламных призывов и кликбейта. Если новость — слух, явно обозначь это и назови издание. Если фактов недостаточно, верни пустой draft_ru.
 Отдельно оцени общественную важность (importance_score) и интересность для читателя (interest_score) по шкале 0–10. Интересность — отдельная редакционная оценка для новостей, не оценка надёжности источника. Не ставь 10 просто за громкое имя; учитывай масштаб, последствия, новизну и отношение к российскому футболу. Для результата завершённого матча интересность не используется.
 Также верни importance как routine|important|major_match; major_match — значимый матч/финал/дерби, а не просто известная команда.
 Если в заголовке или тексте новости есть итоговый счёт завершившегося матча (формат вида «2:1», «3:0», «1:0») — обязательно верни content_type="match_result" и match_result с точными полями home_team, away_team, home_score, away_score, competition и status. Счёт бери только из переданных RSS-данных; если порядок команд или счёт неясен, не заполняй match_result. Для остальных футбольных событий используй content_type="event".
@@ -244,15 +244,39 @@ def _apply_result(db: sqlite3.Connection, pending_ids: list[int], events: list[d
                 and match_fields.get("match_away_score") is not None
             )
             eligible, mode_reason = match_result_eligible(match_fields.get("match_competition"), rules)
+            match_fp = None
+            event_date = None
+            if complete_result:
+                from .editorial import match_fingerprint
+                event_date = db.execute("SELECT event_date FROM events WHERE id=?", (canonical,)).fetchone()[0]
+                match_fp = match_fingerprint(
+                    str(match_fields["match_home_team"]), str(match_fields["match_away_team"]),
+                    int(match_fields["match_home_score"]), int(match_fields["match_away_score"]),
+                    str(match_fields.get("match_competition") or ""),
+                )
             if not complete_result:
                 state, state_reason = "awaiting_verification", "Не удалось подтвердить команды, турнир, точный счёт и статус завершённого матча"
             elif not eligible:
                 state, state_reason = "awaiting_verification", mode_reason
-            elif count >= min_independent_publishers(lane, rules):
-                state, state_reason = "awaiting_review", None
             else:
-                required = min_independent_publishers(lane, rules)
-                state, state_reason = "awaiting_verification", f"Недостаточно подтверждений счёта (нужно независимых издателей: {required})"
+                # Dedup: if this exact match is already tracked within a 3-day window, don't
+                # create a duplicate that the autopublisher would post again (e.g. «Зенит 3:2
+                # Краснодар» reported as «Краснодар 2:3 Зенит» under a different competition
+                # spelling and on a different day).
+                dup = db.execute(
+                    """SELECT id FROM events WHERE match_fingerprint=? AND id!=?
+                       AND state IN ('awaiting_verification','awaiting_review','approved','retry_wait','publishing','published')
+                       AND event_date BETWEEN date(?, '-3 days') AND date(?, '+3 days')
+                       LIMIT 1""",
+                    (match_fp, canonical, event_date, event_date),
+                ).fetchone()
+                if dup:
+                    state, state_reason = "skipped", "Дубликат результата матча (тот же счёт, команды и турнир уже учтены)"
+                elif count >= min_independent_publishers(lane, rules):
+                    state, state_reason = "awaiting_review", None
+                else:
+                    required = min_independent_publishers(lane, rules)
+                    state, state_reason = "awaiting_verification", f"Недостаточно подтверждений счёта (нужно независимых издателей: {required})"
         elif interest_score < int(rules["interesting_news"]["min_interest_score"]):
             minimum = int(rules["interesting_news"]["min_interest_score"])
             state, state_reason = "skipped", f"Интересность {interest_score}/10 ниже порога редакционной очереди {minimum}/10"
@@ -268,13 +292,13 @@ def _apply_result(db: sqlite3.Connection, pending_ids: list[int], events: list[d
             db.execute("""UPDATE events SET state=?,state_reason=?,relevance=?,relevance_score=?,
                 importance=?,importance_score=?,interest_score=?,publication_lane=?,news_priority=?,draft_text=?,
                 ai_state='complete',ai_reason=?,ai_model=?,match_content_type=?,match_home_team=?,match_away_team=?,
-                match_home_score=?,match_away_score=?,match_competition=?,match_status=?,
+                match_home_score=?,match_away_score=?,match_competition=?,match_status=?,match_fingerprint=?,
                 analyzed_at=?,ai_next_attempt_at=NULL,updated_at=? WHERE id=?""",
                 (state,state_reason,relevance,score,importance,importance_score,interest_score,lane,priority,draft,
                  reason,model,match_fields["match_content_type"],match_fields.get("match_home_team"),
                  match_fields.get("match_away_team"),match_fields.get("match_home_score"),
                  match_fields.get("match_away_score"),match_fields.get("match_competition"),
-                 match_fields.get("match_status"),utc_now(),utc_now(),canonical))
+                 match_fields.get("match_status"),match_fp,utc_now(),utc_now(),canonical))
         analyzed += len(pending.intersection(ids))
     return analyzed, merged
 

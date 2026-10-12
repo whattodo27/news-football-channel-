@@ -21,18 +21,18 @@ API_URL = "https://api.groq.com/openai/v1/chat/completions"
 HEADLINE_TTL_DAYS = 3
 HEADLINE_MAX_ATTEMPTS = 3
 HEADLINE_BACKOFF_SECONDS = 1.0
-HEADLINE_MAX_WORDS = 5
-HEADLINE_FALLBACK_WORDS = 5
+HEADLINE_MAX_WORDS = 9
+HEADLINE_FALLBACK_WORDS = 9
 
 SYSTEM_PROMPT = (
-    "Ты редактор заголовков футбольного Telegram-канала. Сократи новость до короткого, "
-    "живого, интригующего заголовка из 2–5 слов на русском языке в тоне спортивного "
-    "комментатора, по схеме «субъект + глагол действия»: назови главного героя и его действие "
-    "или заявление, но скрой сам предмет (что именно он сделал, сказал, подтвердил), чтобы "
-    "читатель захотел открыть пост. Заверши заголовок многоточием «…». Примеры: "
-    "«Некрасов подтвердил…», «Месси объявил…», «Зенит договорился…». Не обрезай слово "
-    "посередине. Без эмодзи, кавычек-ёлочек и точки. Верни ровно заголовок с многоточием "
-    "в конце, без пояснений и обрамления."
+    "Ты редактор заголовков футбольного Telegram-канала. Составь короткий, но полностью "
+    "понятный заголовок новости: по нему сразу должно быть ясно, что именно произошло. "
+    "Назови главного героя (команду или игрока) и его конкретное действие или главный факт — "
+    "не прячь суть за интригой. Обычно 3–8 слов на русском, в тоне спортивного комментатора. "
+    "Заголовок должен быть самодостаточным и однозначным: читатель, увидевший только его, "
+    "понимает суть. Не обрезай слово посередине. Без эмодзи, без кавычек-ёлочек и без точки "
+    "в конце. Примеры: «Роналду отстранён от сборной Португалии», «Месси установил рекорд MLS», "
+    "«Зенит разгромил Краснодар со счётом 3:2». Верни ровно заголовок, без пояснений и обрамления."
 )
 
 
@@ -41,16 +41,13 @@ def _key_and_model() -> tuple[str | None, str]:
 
 
 def _normalize(text: str) -> str:
-    """Strip wrappers/punctuation, hard-cap the word count, and ensure a trailing ellipsis."""
+    """Strip wrappers/punctuation and hard-cap the word count (no forced trailing ellipsis)."""
     text = text.strip().strip("«»\"'“”‘’").strip()
     text = " ".join(text.split())
     words = [w for w in text.split() if w]
     if len(words) > HEADLINE_MAX_WORDS:
         words = words[:HEADLINE_MAX_WORDS]
-    text = " ".join(words).rstrip(" ,.;:!-—–…").strip()
-    if text and not text.endswith("…"):
-        text += "…"
-    return text
+    return " ".join(words).rstrip(" ,.;:!-—–…").strip()
 
 
 def _fallback_headline(title: str, draft: str) -> str | None:
@@ -65,7 +62,7 @@ def _fallback_headline(title: str, draft: str) -> str | None:
         words.append(clean)
     if not words:
         return None
-    return " ".join(words[:HEADLINE_FALLBACK_WORDS]).rstrip(" ,.;:!-—–…").strip() + "…"
+    return " ".join(words[:HEADLINE_FALLBACK_WORDS]).rstrip(" ,.;:!-—–…").strip()
 
 
 def _request(title: str, draft: str, key: str, model: str) -> str:

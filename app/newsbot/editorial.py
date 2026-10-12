@@ -157,12 +157,139 @@ def _fold_competition(value: str) -> str:
     """NFKD-fold diacritics so Brasileirão matches Brasileirao."""
     decomposed = unicodedata.normalize("NFKD", value.casefold())
     stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    return re.sub(r"[^0-9a-zа-яё]+", " ", stripped).strip()
+    return re.sub(r"[^0-9a-zа-яё]+\s*", " ", stripped).strip()
+
+
+# Cyrillic -> Latin transliteration for team names, so a Russian RPL/RSS spelling
+# («Рома», «Марсель») can resolve against the Latin crest/flag aliases in the library.
+_CYR = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch",
+    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+}
+# Russian spellings that a mechanical transliteration cannot recover (French/Italian
+# club names, abbreviations). Keys are the normalized Cyrillic form.
+_TEAM_LATIN_OVERRIDES = {
+    "марсель": ["marseille"],
+    "ювентус": ["juventus"],
+    "псж": ["paris saint germain", "paris sg", "psg"],
+    "пари сен-жермен": ["paris saint germain", "paris sg"],
+    "интер": ["inter milan", "inter"],
+    "милан": ["ac milan", "milan"],
+    "труа": ["troyes"],
+    "тройё": ["troyes"],
+    "тулуза": ["toulouse"],
+    "аякс": ["ajax"],
+    "бавария": ["bayern munich", "fc bayern"],
+    "боруссия": ["borussia dortmund"],
+    "реал": ["real madrid"],
+    "барселона": ["fc barcelona", "barcelona"],
+    "атлетико": ["atletico madrid"],
+    "севилья": ["sevilla"],
+    "вильярреал": ["villarreal"],
+    "челси": ["chelsea"],
+    "арсенал": ["arsenal"],
+    "ливерпуль": ["liverpool"],
+    "манчестер сити": ["manchester city"],
+    "манчестер юнайтед": ["manchester united"],
+    "тоттенхэм": ["tottenham hotspur"],
+    "порту": ["fc porto", "porto"],
+    "бенфика": ["benfica"],
+    "спортинг": ["sporting cp", "sporting"],
+    "лацио": ["lazio"],
+    "наполи": ["napoli"],
+    "фиорентина": ["fiorentina"],
+}
+
+
+def transliterate(value: str) -> str:
+    """Transliterate Cyrillic letters to Latin; non-Cyrillic characters pass through."""
+    return "".join(_CYR.get(ch, ch) for ch in value.casefold())
+
+
+def fold_team(value: str) -> str:
+    """Normalize a team name for comparison: casefold, transliterate, strip marks/punct.
+
+    When a canonical override exists (French/Italian names, abbreviations), that wins so
+    «Труа» and «Тройё» both fold to «troyes» and «Марсель» folds to «marseille».
+    """
+    raw = str(value or "").strip()
+    cyr_key = re.sub(r"[^0-9a-zа-яё]+", "", raw.casefold())
+    overrides = _TEAM_LATIN_OVERRIDES.get(cyr_key)
+    if overrides:
+        first = re.sub(r"[^0-9a-z]+", "", transliterate(overrides[0]))
+        if first:
+            return first
+    translit = transliterate(raw)
+    decomposed = unicodedata.normalize("NFKD", translit)
+    stripped = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return re.sub(r"[^0-9a-zа-яё]+", "", stripped)
+
+
+def team_lookup_forms(value: str | None) -> list[str]:
+    """All normalized comparison forms for a team name (Cyrillic + transliterated + overrides)."""
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    forms = [fold_team(raw)]
+    translit_norm = re.sub(r"[^0-9a-z]+", "", transliterate(raw))
+    if translit_norm and translit_norm not in forms:
+        forms.append(translit_norm)
+    cyr_key = re.sub(r"[^0-9a-zа-яё]+", "", raw.casefold())
+    for latin in _TEAM_LATIN_OVERRIDES.get(cyr_key, []):
+        norm = re.sub(r"[^0-9a-z]+", "", transliterate(latin))
+        if norm and norm not in forms:
+            forms.append(norm)
+    return [f for f in forms if f]
+
+
+def canonical_competition(competition: str | None, rules: dict[str, Any] | None = None) -> str:
+    """Map a competition string to its selected competition's canonical name, else the folded raw.
+
+    «РПЛ», «Российская Премьер-Лига» and «RPL» all fold to the canonical «Российская Премьер-Лига»
+    entry name, so a match reported under different spellings deduplicates to one identity.
+    """
+    rules = rules or load_rules()
+    candidate = str(competition or "").strip()
+    for item in rules["match_results"].get("selected_competitions", []):
+        names = [str(item["name"]), *(str(alias) for alias in item.get("aliases", []))]
+        if _competition_matches(candidate, names):
+            return _fold_competition(str(item["name"]))
+    return _fold_competition(candidate)
+
+
+def match_fingerprint(home: str, away: str, home_score: int, away_score: int,
+                      competition: str | None) -> str:
+    """Canonical identity for a completed match, immune to home/away order and spelling.
+
+    Teams are sorted so «Зенит 3:2 Краснодар» and «Краснодар 2:3 Зенит» produce the same key.
+    The day is deliberately NOT part of the key: the same fixture is often reported under
+    different days (night matches, timezone/late coverage), so dedup must compare dates
+    within a tolerance window instead of on an exact day.
+    """
+    import hashlib
+    a, b = sorted((fold_team(home), fold_team(away)))
+    if a == fold_team(home):
+        sa, sb = home_score, away_score
+    else:
+        sa, sb = away_score, home_score
+    comp = canonical_competition(competition, rules=None)
+    material = f"{a}|{b}|{sa}|{sb}|{comp}"
+    return hashlib.sha256(material.encode()).hexdigest()
 
 
 def _competition_matches(candidate: str, names: list[str]) -> bool:
+    if not names:
+        return False
     normalized = _fold_competition(candidate)
-    return bool(normalized and any(_fold_competition(alias) == normalized for alias in names))
+    latin = _fold_competition(transliterate(candidate))
+    for alias in names:
+        folded = _fold_competition(alias)
+        if folded in (normalized, latin) or _fold_competition(transliterate(alias)) in (normalized, latin):
+            return True
+    return False
 
 
 def match_result_eligible(competition: str | None, rules: dict[str, Any] | None = None) -> tuple[bool, str | None]:

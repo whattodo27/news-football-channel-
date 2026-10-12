@@ -223,12 +223,27 @@ def generate_scorecard(db: sqlite3.Connection, event_id: int, force: bool = Fals
             draw.text((center_x, start_y + index * 66), line, font=font, anchor="mm",
                       fill=(255, 255, 255, 255), stroke_width=2, stroke_fill=(0, 0, 0, 100))
 
-    draw.rounded_rectangle((200, 790, 880, 975), radius=56, fill=(2, 13, 22, 128),
+    # Score plate with stylized typography: accent-green digits, brand underline.
+    draw.rounded_rectangle((200, 790, 880, 975), radius=56, fill=(2, 13, 22, 150),
                            outline=(255, 255, 255, 42), width=2)
-    score = f"{int(event['match_home_score'])} : {int(event['match_away_score'])}"
-    score_font = _fit_font(draw, score, 740, 164)
-    draw.text((540, 886), score, font=score_font, anchor="mm", fill=(255, 255, 255, 255),
-              stroke_width=2, stroke_fill=(0, 0, 0, 80))
+    home_score = str(int(event["match_home_score"]))
+    away_score = str(int(event["match_away_score"]))
+    # Fit both digits plus the separator so the two sides stay the same size.
+    digit_font = _fit_font(draw, "8", 360, 190, bold=True)
+    sep_font = _fit_font(draw, ":", 120, 120, bold=True)
+    left_w = draw.textbbox((0, 0), home_score, font=digit_font)[2]
+    right_w = draw.textbbox((0, 0), away_score, font=digit_font)[2]
+    total_w = left_w + sep_font.getbbox(":")[2] + right_w + 80
+    if total_w > 740:
+        digit_font = _fit_font(draw, "8", 360, 150, bold=True)
+    draw.text((395, 886), home_score, font=digit_font, anchor="mm",
+              fill=(104, 235, 164, 255), stroke_width=3, stroke_fill=(0, 0, 0, 120))
+    draw.text((685, 886), away_score, font=digit_font, anchor="mm",
+              fill=(104, 235, 164, 255), stroke_width=3, stroke_fill=(0, 0, 0, 120))
+    draw.text((540, 886), ":", font=sep_font, anchor="mm", fill=(255, 255, 255, 230),
+              stroke_width=2, stroke_fill=(0, 0, 0, 90))
+    # Accent underline beneath the score for a styled, editorial feel.
+    draw.rounded_rectangle((480, 950, 600, 958), radius=4, fill=(104, 235, 164, 220))
     status = {"final": "ФИНАЛ", "extra_time": "ПОСЛЕ ДОПОЛНИТЕЛЬНОГО ВРЕМЕНИ"}[str(event["match_status"])]
     status_font = _fit_font(draw, status, 850, 30)
     draw.rounded_rectangle((225, 1070, 855, 1156), radius=43, fill=(104, 235, 164, 242))
@@ -325,11 +340,12 @@ def _resolve_event_visual(db: sqlite3.Connection, title: str) -> tuple[str | Non
 
 def generate_news_card(db: sqlite3.Connection, event_id: int,
                        photo_path: str | None = None, photo_origin: str | None = None) -> str:
-    """Render an interesting_news card: random background + headline (+ photo or crest/flag).
+    """Render an interesting_news card: real photo full-bleed + headline on a bottom scrim.
 
-    If ``photo_path`` is given it is composited ON TOP of the background as the main
-    image; otherwise a crest/flag resolved from the title is overlaid, and if neither
-    resolves only the background + headline are drawn. No score line, no brand.
+    The editorial background library is NOT used here (it is reserved for match-result
+    cards). ``photo_path`` is a real photo resolved from the internet (RSS/Commons); if it
+    is missing or unreadable the card falls back to a plain dark gradient so a headline can
+    still render, and no crest/flag placeholder is drawn. No score line, no brand.
     """
     event = db.execute("SELECT id,title,image_credit,image_license FROM events WHERE id=?", (event_id,)).fetchone()
     if not event:
@@ -339,56 +355,35 @@ def generate_news_card(db: sqlite3.Connection, event_id: int,
     if not headline:
         raise ValueError(f"Event {event_id} has no headline to render; falling back to text-only post")
 
-    canvas, background_asset = _background(db)
-    draw = ImageDraw.Draw(canvas, "RGBA")
-
-    # Photo (RSS/AI) composited as a rounded main image in the upper area, or a
-    # resolved crest/flag -- never a placeholder when neither is available.
+    # Base layer: the real photo fitted full-bleed, or a neutral gradient when absent.
+    canvas = None
     if photo_path and Path(photo_path).is_file():
         try:
             with Image.open(photo_path) as source:
-                photo = ImageOps.fit(source.convert("RGB"), (960, 610),
-                                     method=Image.Resampling.LANCZOS).convert("RGBA")
-            photo = _rounded_alpha(photo, 24)
-            canvas.alpha_composite(photo, (60, 152))
-            draw.rounded_rectangle((60, 152, 1020, 762), radius=24,
-                                   outline=(255, 255, 255, 40), width=2)
+                canvas = ImageOps.fit(source.convert("RGB"), SIZE,
+                                      method=Image.Resampling.LANCZOS).convert("RGBA")
         except (OSError, ValueError) as exc:
-            LOGGER.warning("news-card photo overlay failed event=%d error=%s",
-                           event_id, type(exc).__name__)
+            LOGGER.warning("news-card photo fit failed event=%d error=%s", event_id, type(exc).__name__)
             photo_path = None
+    if canvas is None:
+        canvas = _gradient_background()
+        photo_path = None
+    draw = ImageDraw.Draw(canvas, "RGBA")
 
-    if not photo_path:
-        visual_path, kind = _resolve_event_visual(db, str(event["title"] or ""))
-        if visual_path:
-            try:
-                with Image.open(visual_path) as source:
-                    visual = _transparent_outer_matte(source)
-                if kind == "crest":
-                    visual.thumbnail((300, 300), Image.Resampling.LANCZOS)
-                else:
-                    visual.thumbnail((360, 220), Image.Resampling.LANCZOS)
-                    visual = _rounded_alpha(visual, 16)
-                visual = _soft_shadow(visual)
-                canvas.alpha_composite(visual, (540 - visual.width // 2, 470 - visual.height // 2))
-            except (OSError, ValueError) as exc:
-                LOGGER.warning("news-card crest/flag overlay failed event=%d error=%s",
-                               event_id, type(exc).__name__)
-
-    # Soft bottom scrim for headline legibility -- no hard-edged plate.
+    # Soft bottom scrim for headline legibility.
     scrim = Image.new("RGBA", SIZE, (0, 0, 0, 0))
     scrim_draw = ImageDraw.Draw(scrim)
-    for y in range(720, SIZE[1]):
-        alpha = int(135 * (y - 720) / (SIZE[1] - 720))
+    for y in range(600, SIZE[1]):
+        alpha = int(165 * (y - 600) / (SIZE[1] - 600))
         scrim_draw.line((0, y, SIZE[0], y), fill=(0, 7, 14, alpha))
     canvas = Image.alpha_composite(canvas, scrim)
     draw = ImageDraw.Draw(canvas, "RGBA")
 
     lines = _headline_layout(draw, headline)
+    top_y = 1030 - (len(lines) - 1) * 41
     for index, (line, font) in enumerate(lines):
-        y = 1100 + (index - (len(lines) - 1) / 2) * 74
-        draw.text((540, y), line, font=font, anchor="mm",
-                  fill=(255, 255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0, 110))
+        draw.text((540, top_y + index * 82), line, font=font, anchor="mm",
+                  fill=(255, 255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0, 140))
 
     output_dir = source_images_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -398,39 +393,28 @@ def generate_news_card(db: sqlite3.Connection, event_id: int,
         path.unlink(missing_ok=True)
         raise ValueError("Generated news card exceeds 15 MB")
 
-    reason = {
-        "rss": "RSS/Commons фото на фоновой карточке",
-        "ai": "ИИ-фото на фоновой карточке",
-    }.get(photo_origin, "Текстовая карточка (фон + заголовок)")
+    reason = "Фото из интернета (RSS/Commons) с заголовком" if photo_path else "Текстовая карточка (градиент + заголовок)"
     credits: list[str] = []
     licenses: list[str] = []
-    if photo_origin == "rss":
+    if photo_path:
         photo_credit = str(event["image_credit"] or "").strip()
         photo_license = str(event["image_license"] or "").strip()
         if photo_credit:
             credits.append(photo_credit)
         if photo_license:
             licenses.append(photo_license)
-    if background_asset and background_asset["credit"] and background_asset["credit"] not in credits:
-        credits.append(background_asset["credit"])
-    if background_asset and background_asset["license"] and background_asset["license"] not in licenses:
-        licenses.append(background_asset["license"])
     license_name = "; ".join(licenses) or None
     credit = "; ".join(credits) or None
-    generated_at = utc_now() if photo_origin == "ai" else None
-    selection_model = "local-card-renderer" if photo_origin != "ai" else \
-        f"local-card-renderer + {os.getenv('IMAGE_GEN_MODEL', 'AI')}"
     with db:
         db.execute(
             """UPDATE events SET image_path=?,image_origin='news_card',image_description=?,
                       image_license=?,image_credit=?,image_selected_at=?,image_selection_reason=?,
-                      image_selection_model=?,image_generated_at=?,updated_at=? WHERE id=?""",
-            (str(path), headline, license_name, credit, utc_now(), reason, selection_model,
-             generated_at, utc_now(), event_id),
+                      image_selection_model=?,image_generated_at=NULL,updated_at=? WHERE id=?""",
+            (str(path), headline, license_name, credit, utc_now(), reason,
+             "local-card-renderer", utc_now(), event_id),
         )
-    LOGGER.info("generated news card event=%d background=%s photo=%s bytes=%d",
-                event_id, background_asset["id"] if background_asset else "gradient",
-                "yes" if photo_path else "no", path.stat().st_size)
+    LOGGER.info("generated news card event=%d photo=%s bytes=%d",
+                event_id, "yes" if photo_path else "no(gradient)", path.stat().st_size)
     return str(path)
 
 

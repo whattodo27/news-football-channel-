@@ -371,17 +371,39 @@ def list_assets(db: sqlite3.Connection, asset_type: str | None = None) -> list[s
 
 
 def find_crest(db: sqlite3.Connection, team_name: str) -> sqlite3.Row | None:
-    normalized = _alias_norm(team_name)
-    key = re.sub(r"[^a-z0-9_-]+", "_", team_name.strip().lower()).strip("_")
-    key_norm = _alias_norm(key)
-    return db.execute(
-        """SELECT a.* FROM media_assets a
+    from .editorial import team_lookup_forms
+
+    forms = team_lookup_forms(team_name)
+    if not forms:
+        return None
+    marks = ",".join("?" for _ in forms)
+    row = db.execute(
+        f"""SELECT a.* FROM media_assets a
            LEFT JOIN media_asset_aliases x ON x.asset_id=a.id
-           WHERE a.asset_type='crest' AND a.enabled=1
-             AND (x.alias_norm IN (?,?) OR lower(a.asset_key)=lower(?))
+           WHERE a.asset_type='crest' AND a.enabled=1 AND x.alias_norm IN ({marks})
            ORDER BY a.id LIMIT 1""",
-        (normalized, key_norm, key),
+        forms,
     ).fetchone()
+    if row:
+        with db:
+            db.execute("UPDATE media_assets SET last_used_at=? WHERE id=?", (utc_now(), row["id"]))
+        return row
+    # Transliterated substring fallback over registered aliases (e.g. «Рома» -> "AS Roma").
+    latin = [f for f in forms if re.fullmatch(r"[0-9a-z]{4,}", f)]
+    if not latin:
+        return None
+    rows = db.execute(
+        """SELECT a.*, x.alias_norm AS an FROM media_assets a
+           JOIN media_asset_aliases x ON x.asset_id=a.id
+           WHERE a.asset_type='crest' AND a.enabled=1""",
+    ).fetchall()
+    for lat in latin:
+        hits = sorted((r for r in rows if lat in (r["an"] or "")), key=lambda r: len(r["an"] or ""))
+        if hits:
+            with db:
+                db.execute("UPDATE media_assets SET last_used_at=? WHERE id=?", (utc_now(), hits[0]["id"]))
+            return hits[0]
+    return None
 
 
 def choose_background(db: sqlite3.Connection, asset_id: int | None = None) -> sqlite3.Row | None:

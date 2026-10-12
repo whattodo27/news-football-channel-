@@ -148,6 +148,7 @@ def connect(path: Path) -> sqlite3.Connection:
         "match_home_team": "TEXT", "match_away_team": "TEXT", "match_home_key": "TEXT",
         "match_away_key": "TEXT", "match_home_score": "INTEGER", "match_away_score": "INTEGER",
         "match_competition": "TEXT", "match_status": "TEXT",
+        "match_fingerprint": "TEXT",
         "headline_text": "TEXT", "headline_generated_at": "TEXT",
     }
     for name, definition in migrations.items():

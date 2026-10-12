@@ -130,15 +130,16 @@ def recover_stale_publishing(
 
 def _resolve_news_image(db: sqlite3.Connection, event_id: int,
                         image_row: sqlite3.Row | None) -> str | None:
-    """Resolve an interesting_news image via the fallback chain; return a path or None.
+    """Resolve an interesting_news image via the internet-photo fallback chain; return a path or None.
 
-    Order: reuse an already-built card -> RSS/Commons photo composited on a card ->
-    AI-generated photo composited -> text-only card -> None (text-only post).
+    Order: reuse an already-built card -> RSS/Commons photo fitted full-bleed on a card ->
+    text-only card (gradient + headline) -> None (text-only post). AI photo generation has
+    been removed by design; photos come from RSS media or Wikimedia Commons only.
     """
     if (image_row and image_row["image_origin"] == "news_card"
             and image_row["image_path"] and os.path.isfile(image_row["image_path"])):
         return image_row["image_path"]
-    # 1. RSS / Commons photo, composited onto a background card.
+    # 1. RSS / Commons photo, fitted full-bleed onto a card.
     try:
         from .image_selection import select_event_image
         from .scorecard import generate_news_card
@@ -146,19 +147,9 @@ def _resolve_news_image(db: sqlite3.Connection, event_id: int,
         LOGGER.info("news image resolved via RSS/Commons photo event=%d", event_id)
         return generate_news_card(db, event_id, photo_path=photo, photo_origin="rss")
     except ValueError as exc:
-        LOGGER.warning("RSS/Commons photo unavailable for event=%d (%s); trying AI generation",
+        LOGGER.warning("RSS/Commons photo unavailable for event=%d (%s); trying text-only card",
                        event_id, exc)
-    # 2. AI-generated photo, composited onto a background card.
-    try:
-        from .imagegen_ai import generate_ai_photo
-        from .scorecard import generate_news_card
-        photo = generate_ai_photo(db, event_id)
-        LOGGER.info("news image resolved via AI photo event=%d", event_id)
-        return generate_news_card(db, event_id, photo_path=photo, photo_origin="ai")
-    except ValueError as exc:
-        LOGGER.warning("AI photo generation unavailable for event=%d (%s); trying text-only card",
-                       event_id, exc)
-    # 3. Text-only card: background + headline (+ crest/flag if resolvable).
+    # 2. Text-only card: gradient + headline.
     try:
         from .scorecard import generate_news_card
         LOGGER.info("news image resolved via text-only card event=%d", event_id)
