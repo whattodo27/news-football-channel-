@@ -201,6 +201,8 @@ _TEAM_LATIN_OVERRIDES = {
     "лацио": ["lazio"],
     "наполи": ["napoli"],
     "фиорентина": ["fiorentina"],
+    "комо": ["como"],
+    "монако": ["monaco"],
 }
 
 
